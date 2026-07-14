@@ -1,23 +1,25 @@
-django
-djangorestframework
-djangorestframework-simplejwt
-django-cors-headers
-python-dotenv
-requests
-beautifulsoup4
+Django==5.0.4
+django-ninja==1.6.2
+djangorestframework==3.15.1
+djangorestframework-simplejwt==5.5.1
+django-cors-headers==4.3.1
+python-dotenv==1.0.1
+requests==2.32.5
+beautifulsoup4==4.14.3
 
-pypdf
-python-docx
-python-pptx
+pypdf==6.12.2
+python-docx==1.2.0
+python-pptx==1.0.2
+PyMuPDF==1.27.2.3
 
-pytesseract
-pdf2image
-Pillow
+pytesseract==0.3.13
+pdf2image==1.17.0
+Pillow==11.3.0
 
-sentence-transformers
-chromadb
-groq
+sentence-transformers==5.5.1
+chromadb==1.5.9
+groq==0.37.1
 
-google-api-python-client
-google-auth
-google-auth-oauthlib
+google-api-python-client==2.197.0
+google-auth==2.53.0
+google-auth-oauthlib==1.4.0
