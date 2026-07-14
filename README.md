@@ -43,21 +43,10 @@ venv\Scripts\activate          # Windows
 pip install -r requirements.txt
 ```
 
-Create `backend/.env` (never commit this file — it's gitignored):
+Copy `backend/.env.example` to `backend/.env` and fill in real values (never commit `.env` — it's gitignored):
 
-```
-GROQ_API_KEY=your-groq-key
-GROQ_MODEL=llama-3.3-70b-versatile
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-DJANGO_SECRET_KEY=change-me
-DJANGO_DEBUG=True
-EMAIL_HOST_USER=...
-EMAIL_HOST_PASSWORD=...
-DEFAULT_FROM_EMAIL=...
-FRONTEND_URL=http://localhost:3000
-GOOGLE_OAUTH_CLIENT_ID=...          # optional, only needed for Drive sync
-GOOGLE_OAUTH_CLIENT_SECRET=...
-GOOGLE_OAUTH_REDIRECT_URI=...
+```bash
+cp .env.example .env
 ```
 
 Tesseract OCR must be installed separately and its path set in `rag/document_processor.py` (`pytesseract.pytesseract.tesseract_cmd`).
@@ -74,10 +63,10 @@ cd frontend
 npm install
 ```
 
-Create `frontend/.env.local`:
+Copy `frontend/.env.local.example` to `frontend/.env.local`:
 
-```
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api
+```bash
+cp .env.local.example .env.local
 ```
 
 ```bash
