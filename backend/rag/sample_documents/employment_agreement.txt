@@ -1,0 +1,35 @@
+EMPLOYMENT AGREEMENT
+
+This Employment Agreement ("Agreement") is entered into between Nimbus Technologies Pvt. Ltd., a company having its registered office at Tower B, Cyber Hub, Gurugram, Haryana ("Company"), and Mr. Arjun Sharma, residing at Sector 45, Gurugram, Haryana ("Employee").
+
+1. POSITION AND DUTIES
+The Employee is appointed to the position of Senior Software Engineer, reporting to the Engineering Manager. The Employee shall perform such duties and responsibilities as are customarily associated with this position and as may be reasonably assigned by the Company from time to time.
+
+2. EFFECTIVE DATE AND PROBATION
+This Agreement shall take effect from the Employee's date of joining. The Employee shall be on probation for a period of six (6) months from the date of joining, during which either Party may terminate the employment by providing fifteen (15) days' written notice.
+
+3. COMPENSATION
+The Employee shall be paid a gross annual salary of Rs. 18,00,000 (Rupees Eighteen Lakh only), payable in accordance with the Company's standard payroll cycle, subject to applicable statutory deductions including provident fund and income tax at source.
+
+4. WORKING HOURS AND LEAVE
+The standard working hours shall be 9:30 AM to 6:30 PM, Monday through Friday. The Employee shall be entitled to twenty-one (21) days of paid annual leave, twelve (12) days of casual/sick leave, and public holidays as per the Company's leave policy in force from time to time.
+
+5. CONFIDENTIALITY
+The Employee agrees to hold in strict confidence all proprietary and confidential information of the Company, including trade secrets, source code, client information, and business strategies, both during the term of employment and for a period of three (3) years following termination, howsoever caused.
+
+6. INTELLECTUAL PROPERTY
+All inventions, designs, source code, and work product created by the Employee in the course of employment, whether solely or jointly with others, shall be the exclusive property of the Company. The Employee agrees to execute any documents reasonably necessary to perfect the Company's ownership of such intellectual property.
+
+7. NON-COMPETE AND NON-SOLICITATION
+During the term of employment and for a period of twelve (12) months thereafter, the Employee shall not, directly or indirectly, solicit the Company's clients or employees for any competing business, to the extent permissible under applicable law.
+
+8. TERMINATION
+Following successful completion of probation, either Party may terminate this Agreement by providing sixty (60) days' written notice, or payment in lieu thereof. The Company may terminate the Employee's services with immediate effect for cause, including but not limited to misconduct, breach of confidentiality, or fraud.
+
+9. GOVERNING LAW
+This Agreement shall be governed by and construed in accordance with the laws of India, and the courts at Gurugram, Haryana shall have exclusive jurisdiction over any disputes arising hereunder.
+
+10. ENTIRE AGREEMENT
+This Agreement, together with the Company's policies referenced herein, constitutes the entire agreement between the Parties regarding the Employee's employment and supersedes all prior discussions or agreements, whether oral or written.
+
+IN WITNESS WHEREOF, the Parties have executed this Agreement as of the date of the Employee's joining.

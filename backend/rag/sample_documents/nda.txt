@@ -1,0 +1,35 @@
+MUTUAL NON-DISCLOSURE AGREEMENT
+
+This Mutual Non-Disclosure Agreement ("Agreement") is entered into as of the Effective Date by and between Vertex Consulting Pvt. Ltd., a company incorporated under the laws of India, having its registered office at 4th Floor, Lakeview Towers, Bengaluru, Karnataka ("Disclosing Party"), and Orion Softworks LLP, having its registered office at 12 MG Road, Pune, Maharashtra ("Receiving Party"), collectively referred to as the "Parties."
+
+1. PURPOSE
+The Parties wish to explore a potential business relationship involving the evaluation of a joint technology licensing arrangement (the "Purpose"). In connection with the Purpose, each Party may disclose to the other certain confidential technical, financial, and business information.
+
+2. DEFINITION OF CONFIDENTIAL INFORMATION
+"Confidential Information" means any information disclosed by either Party to the other, whether orally, in writing, or in any other form, that is designated as confidential or that reasonably should be understood to be confidential given the nature of the information and the circumstances of disclosure, including but not limited to source code, product roadmaps, customer lists, pricing models, and financial projections.
+
+3. OBLIGATIONS OF RECEIVING PARTY
+The Receiving Party shall (a) hold the Confidential Information in strict confidence, (b) not disclose such information to any third party without prior written consent, and (c) use the Confidential Information solely for the Purpose. The Receiving Party shall protect the Confidential Information using at least the same degree of care it uses for its own confidential information, and in no event less than reasonable care.
+
+4. EXCLUSIONS
+Confidential Information does not include information that: (a) is or becomes publicly available through no fault of the Receiving Party; (b) was rightfully known to the Receiving Party prior to disclosure; (c) is independently developed without use of the Confidential Information; or (d) is rightfully received from a third party without breach of any confidentiality obligation.
+
+5. TERM
+This Agreement shall remain in effect for a period of three (3) years from the Effective Date, unless terminated earlier by either Party upon thirty (30) days' written notice. The confidentiality obligations under Clause 3 shall survive for a period of five (5) years following termination or expiration of this Agreement.
+
+6. RETURN OR DESTRUCTION OF MATERIALS
+Upon termination of this Agreement or upon written request, the Receiving Party shall promptly return or destroy all documents, materials, and other tangible manifestations of Confidential Information, and shall certify such destruction in writing if requested.
+
+7. NO LICENSE
+Nothing in this Agreement shall be construed as granting any rights, by license or otherwise, to any Confidential Information disclosed hereunder, except as expressly set forth herein.
+
+8. REMEDIES
+Each Party acknowledges that unauthorized disclosure of Confidential Information may cause irreparable harm for which monetary damages would be an inadequate remedy, and accordingly, the disclosing Party shall be entitled to seek injunctive relief in addition to any other remedies available at law or in equity.
+
+9. GOVERNING LAW AND JURISDICTION
+This Agreement shall be governed by and construed in accordance with the laws of India. The courts at Bengaluru, Karnataka shall have exclusive jurisdiction over any disputes arising out of or in connection with this Agreement.
+
+10. ENTIRE AGREEMENT
+This Agreement constitutes the entire understanding between the Parties with respect to the subject matter hereof and supersedes all prior discussions, negotiations, and agreements, whether written or oral, relating to such subject matter. This Agreement may only be amended by a written instrument signed by both Parties.
+
+IN WITNESS WHEREOF, the Parties have executed this Agreement as of the Effective Date first written above.

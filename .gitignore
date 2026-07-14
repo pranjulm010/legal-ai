@@ -1,0 +1,40 @@
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Databases
+*.sqlite3
+*.sqlite3-journal
+
+# Vector stores / generated indexes
+backend/vector_db/
+labelStudio/chroma_db/
+
+# Uploaded media (user data - not source code)
+backend/media/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
