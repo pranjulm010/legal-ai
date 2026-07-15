@@ -17,11 +17,9 @@ import {
   type ChatSearchResult,
   type ChatSessionListItem,
   type ResearchStep,
-  type ResponseMode,
   type UploadDocumentResponse,
+  type UserType,
 } from "@/lib/api";
-
-type AnswerMode = "plain" | "mixed" | "expert";
 
 type SourceItem = {
   source_type?: string;
@@ -39,7 +37,6 @@ type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  answerMode?: AnswerMode;
   documentName?: string;
   timestamp: Date;
   awaitingWebConfirm?: boolean;
@@ -57,48 +54,12 @@ const ROUTE_LABELS: Record<string, string> = {
   llm_knowledge: "General AI Knowledge",
 };
 
-const ANSWER_MODES: {
-  value: AnswerMode;
-  label: string;
-  icon: string;
-  desc: string;
-}[] = [
-  {
-    value: "plain",
-    label: "Plain English",
-    icon: "👤",
-    desc: "For citizens/public users",
-  },
-  {
-    value: "mixed",
-    label: "Mixed Mode",
-    icon: "🧾",
-    desc: "Simple + legal terms",
-  },
-  {
-    value: "expert",
-    label: "Expert Mode",
-    icon: "⚖️",
-    desc: "For lawyers/professionals",
-  },
-];
-
 const SUGGESTED_QUESTIONS = [
   { text: "My phone was stolen. What legal steps should I take now?", icon: "📱" },
   { text: "Help me understand this FIR and what the next steps are.", icon: "📄" },
   { text: "Find Supreme Court precedents on anticipatory bail.", icon: "⚖️" },
   { text: "Explain Article 21 of the Indian Constitution in simple language.", icon: "📚" },
 ];
-
-function getModeLabel(mode: AnswerMode) {
-  return ANSWER_MODES.find((m) => m.value === mode)?.label || "Plain English";
-}
-
-function toBackendMode(mode: AnswerMode): ResponseMode {
-  if (mode === "plain") return "plain_english";
-  if (mode === "expert") return "professional";
-  return "mixed";
-}
 
 function extractAnswer(data: any): string {
   return (
@@ -257,9 +218,14 @@ export default function LexoraLegalChatPage() {
     }
   }, [authLoading, user, router]);
 
+  // The AI now judges the right explanation style (plain vs technical) from
+  // the question itself instead of a manual mode picker - userType still
+  // matters for permissions/routing though, so it's derived from the
+  // logged-in user's real role rather than a removed UI toggle.
+  const userType: UserType = user?.role === "public" ? "public" : "lawyer";
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [answerMode, setAnswerMode] = useState<AnswerMode>("plain");
 
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentName, setDocumentName] = useState<string | null>(null);
@@ -473,7 +439,6 @@ export default function LexoraLegalChatPage() {
       id: crypto.randomUUID(),
       role: "user",
       content: userText,
-      answerMode,
       documentName: documentName || undefined,
       timestamp: new Date(),
     };
@@ -483,14 +448,11 @@ export default function LexoraLegalChatPage() {
     setLoading(true);
 
     try {
-      const backendMode = toBackendMode(answerMode);
-
       const data = await sendMessageApi({
         question: userText,
         userId: "anonymous",
         sessionId: "default-session",
-        userType: answerMode === "expert" ? "lawyer" : "public",
-        mode: backendMode,
+        userType,
         documentId,
         useAgent,
         useAdvancedAgent: !useAgent,
@@ -515,7 +477,6 @@ export default function LexoraLegalChatPage() {
             id: crypto.randomUUID(),
             role: "assistant",
             content: data.answer && data.answer.trim() ? data.answer : fallbackNote,
-            answerMode,
             documentName: documentName || undefined,
             timestamp: new Date(),
             awaitingWebConfirm: true,
@@ -532,7 +493,6 @@ export default function LexoraLegalChatPage() {
         id: crypto.randomUUID(),
         role: "assistant",
         content: answer,
-        answerMode,
         documentName: documentName || undefined,
         timestamp: new Date(),
         researchSteps: data.research_steps,
@@ -559,7 +519,7 @@ export default function LexoraLegalChatPage() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   },
-  [answerMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, refreshSessions]
+  [userType, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, refreshSessions]
 );
 
   const respondToWebConfirm = useCallback(
@@ -592,8 +552,7 @@ export default function LexoraLegalChatPage() {
           question,
           userId: "anonymous",
           sessionId: "default-session",
-          userType: answerMode === "expert" ? "lawyer" : "public",
-          mode: toBackendMode(answerMode),
+          userType,
           documentId,
           allowWebSearch: true,
           useAgent,
@@ -614,7 +573,6 @@ export default function LexoraLegalChatPage() {
             id: crypto.randomUUID(),
             role: "assistant",
             content: extractAnswer(data),
-            answerMode,
             documentName: documentName || undefined,
             timestamp: new Date(),
             researchSteps: data.research_steps,
@@ -638,7 +596,7 @@ export default function LexoraLegalChatPage() {
         setLoading(false);
       }
     },
-    [answerMode, documentId, documentName, useAgent, activeSessionId, region, refreshSessions]
+    [userType, documentId, documentName, useAgent, activeSessionId, region, refreshSessions]
   );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1185,19 +1143,6 @@ export default function LexoraLegalChatPage() {
                   ← Dashboard
                 </Link>
               )}
-
-              <span
-                style={{
-                  padding: "5px 10px",
-                  borderRadius: 999,
-                  background: "rgba(201,169,110,0.08)",
-                  border: "1px solid rgba(201,169,110,0.14)",
-                  color: "#c9a96e",
-                  fontSize: 11,
-                }}
-              >
-                {getModeLabel(answerMode)}
-              </span>
             </div>
           </header>
 
@@ -1495,9 +1440,6 @@ export default function LexoraLegalChatPage() {
                           color: "#5a4f3f",
                         }}
                       >
-                        {message.answerMode && (
-                          <span>Mode: {getModeLabel(message.answerMode)}</span>
-                        )}
                         {message.documentName && (
                           <span>Doc: {message.documentName}</span>
                         )}
@@ -1541,52 +1483,6 @@ export default function LexoraLegalChatPage() {
             }}
           >
             <div style={{ maxWidth: 820, margin: "0 auto" }}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                  gap: 9,
-                  marginBottom: 10,
-                }}
-              >
-                {ANSWER_MODES.map((mode) => {
-                  const active = answerMode === mode.value;
-
-                  return (
-                    <button
-                      key={mode.value}
-                      type="button"
-                      onClick={() => setAnswerMode(mode.value)}
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: 13,
-                        border: active
-                          ? "1px solid rgba(201,169,110,0.55)"
-                          : "1px solid rgba(201,169,110,0.12)",
-                        background: active
-                          ? "rgba(201,169,110,0.13)"
-                          : "rgba(255,255,255,0.025)",
-                        color: active ? "#f0e6cc" : "#8a7c68",
-                        cursor: "pointer",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span>{mode.icon}</span>
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 800 }}>
-                            {mode.label}
-                          </div>
-                          <div style={{ fontSize: 10, color: "#5a4f3f" }}>
-                            {mode.desc}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
               {documentName && (
                 <div
                   style={{
@@ -1710,7 +1606,7 @@ export default function LexoraLegalChatPage() {
               <div
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
+                  justifyContent: "flex-end",
                   marginTop: 8,
                   color: "#3a3028",
                   fontSize: 10,
@@ -1718,7 +1614,6 @@ export default function LexoraLegalChatPage() {
                   flexWrap: "wrap",
                 }}
               >
-                <span>Current: {getModeLabel(answerMode)}</span>
                 <span>Enter to send</span>
               </div>
             </div>

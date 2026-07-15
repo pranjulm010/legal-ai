@@ -246,30 +246,30 @@ def classify_web_search_intent(question: str) -> bool:
     return bool(isinstance(data, dict) and data.get("wants_web_search"))
 
 
-# answer_mode -> style instructions injected into the system prompt. Keeps
-# the shared anti-hallucination/disclaimer rules identical across modes and
-# only varies HOW the answer is written.
-_STYLE_INSTRUCTIONS = {
-    "plain_english": """
-4. Write the ENTIRE answer in plain, everyday language a non-lawyer would understand.
-5. Avoid legal jargon and section/clause numbers. If a law or clause must be mentioned, immediately explain what it means in plain words right after.
-6. Do not add a separate "key legal points" section - keep it conversational and simple throughout.
-""",
-    "mixed": """
-4. First explain in simple language.
-5. Then give key legal points.
-6. Keep the answer structured and professional.
-""",
-    "professional": """
-4. Write for a practicing lawyer: use precise legal terminology and cite the specific clauses/sections/facts from the context.
-5. Structure the answer like a legal memo (e.g. Issue, Analysis, Conclusion) rather than a simplified explanation.
-6. Do not dumb down or re-explain basic legal terms - assume the reader is a legal professional.
-""",
-}
+# There used to be a manual plain/mixed/professional mode switch the user
+# had to pick before every question. Replaced with one always-on adaptive
+# instruction: the model reads the question itself (its phrasing, how much
+# legal terminology it already uses, who's asking) and judges the right
+# register on its own, the same way a human colleague would - no upfront
+# picker needed. `mode` is accepted for backward compatibility with every
+# existing caller but is intentionally unused now.
+_ADAPTIVE_STYLE_INSTRUCTION = """
+4. Judge the right register from the question itself, the same way a human
+   colleague would, rather than a fixed style: if it reads like a
+   layperson/citizen question (plain wording, no legal terms, asking "what
+   does this mean for me"), explain in everyday language and immediately
+   translate any law/clause you must mention into plain words. If it reads
+   like a legal professional's question (uses legal terminology, asks for
+   clause-by-clause analysis, citations, or a memo-style answer), respond
+   with precise legal terminology and structure (e.g. Issue, Analysis,
+   Conclusion) without re-explaining basic legal terms. If it's genuinely
+   unclear which, default to explaining simply first and then adding the
+   key legal points - don't ask the user to pick a mode.
+"""
 
 
-def _style_instructions(mode: str) -> str:
-    return _STYLE_INSTRUCTIONS.get(mode, _STYLE_INSTRUCTIONS["mixed"]).strip()
+def _style_instructions(mode: str = "") -> str:
+    return _ADAPTIVE_STYLE_INSTRUCTION.strip()
 
 
 # Retrieved document/web text comes from untrusted third-party sources

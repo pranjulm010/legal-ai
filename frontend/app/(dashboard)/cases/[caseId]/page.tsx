@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { hasPermission } from "@/lib/permissions";
@@ -13,7 +13,6 @@ import {
   postCaseComment,
   sendMessage,
   updateCase,
-  uploadDocument,
   type CaseActivity,
   type CaseDetail,
   type Reminder,
@@ -79,10 +78,6 @@ export default function CaseDetailPage() {
   const [reminderDue, setReminderDue] = useState("");
   const [addingReminder, setAddingReminder] = useState(false);
 
-  const [documentId, setDocumentId] = useState<string | null>(null);
-  const [documentName, setDocumentName] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
@@ -91,8 +86,6 @@ export default function CaseDetailPage() {
   const [activities, setActivities] = useState<CaseActivity[]>([]);
   const [commentBody, setCommentBody] = useState("");
   const [postingComment, setPostingComment] = useState(false);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadCase = useCallback(() => {
     setLoading(true);
@@ -186,42 +179,6 @@ export default function CaseDetailPage() {
     loadActivities();
   };
 
-  const handleUpload = async (file: File) => {
-    setUploading(true);
-
-    try {
-      const data = await uploadDocument(file, "anonymous", caseId);
-      const newDocumentId =
-        data.document_id || data.documentId || data.id || null;
-      const newDocumentName = data.file_name || data.filename || file.name;
-
-      setDocumentId(newDocumentId);
-      setDocumentName(newDocumentName);
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Document uploaded: ${newDocumentName}. Ask a question about it below.`,
-        },
-      ]);
-      loadActivities();
-    } catch (error: any) {
-      console.error("Upload error:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: error?.response?.data?.error || "Document upload failed. Please try again.",
-        },
-      ]);
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const handleAsk = async () => {
     const text = question.trim();
     if (!text || asking) return;
@@ -233,16 +190,14 @@ export default function CaseDetailPage() {
     try {
       const data = await sendMessage({
         question: text,
-        documentId,
         caseId: caseId ? Number(caseId) : null,
         useAgent,
         useAdvancedAgent: !useAgent,
       });
 
       if (data?.needs_web_confirmation) {
-        const fallbackNote = documentId
-          ? "No relevant information found in this document. Search the web for public legal sources?"
-          : "No relevant information found in your firm's documents. Search the web for public legal sources?";
+        const fallbackNote =
+          "No relevant information found in your firm's documents. Search the web for public legal sources?";
 
         setMessages((prev) => [
           ...prev,
@@ -314,7 +269,6 @@ export default function CaseDetailPage() {
     try {
       const data = await sendMessage({
         question: originalQuestion,
-        documentId,
         caseId: caseId ? Number(caseId) : null,
         allowWebSearch: true,
         useAgent,
@@ -486,30 +440,7 @@ export default function CaseDetailPage() {
         </section>
 
         <section className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
-          <h2 className="mb-3 font-semibold text-[#f0e6cc]">Documents &amp; chat</h2>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.docx,.txt,.md,.pptx,.jpg,.jpeg,.png"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) handleUpload(file);
-            }}
-          />
-
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="mb-3 rounded-lg border border-[#c9a96e]/15 px-3 py-2 text-sm text-[#c9a96e] disabled:opacity-50"
-          >
-            {uploading ? "Uploading..." : "📎 Upload document"}
-          </button>
-
-          {documentName && (
-            <p className="mb-3 text-xs text-[#8a7c68]">Active document: {documentName}</p>
-          )}
+          <h2 className="mb-3 font-semibold text-[#f0e6cc]">Case chat</h2>
 
           <label className="mb-3 flex items-center gap-2 text-xs text-[#8a7c68]">
             <input
@@ -637,7 +568,7 @@ export default function CaseDetailPage() {
                   handleAsk();
                 }
               }}
-              placeholder={documentId ? "Ask a question about this document..." : "Ask a question about this case..."}
+              placeholder="Ask a question about this case..."
               className="flex-1 rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50 disabled:opacity-50"
             />
             <button
