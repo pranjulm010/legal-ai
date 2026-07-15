@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/AuthContext";
 import {
   deleteChatSession as deleteChatSessionApi,
   getChatSession,
+  listCases,
   listChatSessions,
   REGIONS,
   renameChatSession as renameChatSessionApi,
@@ -14,6 +15,7 @@ import {
   sendMessage as sendMessageApi,
   uploadDocument as uploadDocumentApi,
   waitForDocumentReady,
+  type CaseListItem,
   type ChatSearchResult,
   type ChatSessionListItem,
   type ResearchStep,
@@ -259,7 +261,9 @@ export default function LexoraLegalChatPage() {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [answerMode, setAnswerMode] = useState<AnswerMode>("plain");
+  // Answer mode is fixed to "plain" - the Plain/Mixed/Expert picker was
+  // removed from the UI, but the backend still expects a valid mode.
+  const [answerMode] = useState<AnswerMode>("plain");
 
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentName, setDocumentName] = useState<string | null>(null);
@@ -270,6 +274,10 @@ export default function LexoraLegalChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [useAgent, setUseAgent] = useState(false);
   const [region, setRegion] = useState("india");
+  // Optional case scope: when set, questions are answered from that case's
+  // own linked documents (backend scopes search_documents by case_id).
+  const [cases, setCases] = useState<CaseListItem[]>([]);
+  const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [resumingSession, setResumingSession] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessionListItem[]>([]);
@@ -292,6 +300,13 @@ export default function LexoraLegalChatPage() {
       .then(setChatSessions)
       .catch((error) => console.error("Failed to load chat sessions:", error));
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    listCases()
+      .then(setCases)
+      .catch((error) => console.error("Failed to load cases:", error));
+  }, [user]);
 
   const loadSession = useCallback((sessionId: number, updateUrl: boolean = true) => {
     setResumingSession(true);
@@ -492,6 +507,7 @@ export default function LexoraLegalChatPage() {
         userType: answerMode === "expert" ? "lawyer" : "public",
         mode: backendMode,
         documentId,
+        caseId: selectedCaseId,
         useAgent,
         useAdvancedAgent: !useAgent,
         chatSessionId: activeSessionId,
@@ -559,7 +575,7 @@ export default function LexoraLegalChatPage() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   },
-  [answerMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, refreshSessions]
+  [answerMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
 );
 
   const respondToWebConfirm = useCallback(
@@ -595,6 +611,7 @@ export default function LexoraLegalChatPage() {
           userType: answerMode === "expert" ? "lawyer" : "public",
           mode: toBackendMode(answerMode),
           documentId,
+          caseId: selectedCaseId,
           allowWebSearch: true,
           useAgent,
           useAdvancedAgent: !useAgent,
@@ -638,7 +655,7 @@ export default function LexoraLegalChatPage() {
         setLoading(false);
       }
     },
-    [answerMode, documentId, documentName, useAgent, activeSessionId, region, refreshSessions]
+    [answerMode, documentId, documentName, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
   );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1543,49 +1560,46 @@ export default function LexoraLegalChatPage() {
             <div style={{ maxWidth: 820, margin: "0 auto" }}>
               <div
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                  gap: 9,
                   marginBottom: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12,
+                  color: "#8a7c68",
                 }}
               >
-                {ANSWER_MODES.map((mode) => {
-                  const active = answerMode === mode.value;
-
-                  return (
-                    <button
-                      key={mode.value}
-                      type="button"
-                      onClick={() => setAnswerMode(mode.value)}
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: 13,
-                        border: active
-                          ? "1px solid rgba(201,169,110,0.55)"
-                          : "1px solid rgba(201,169,110,0.12)",
-                        background: active
-                          ? "rgba(201,169,110,0.13)"
-                          : "rgba(255,255,255,0.025)",
-                        color: active ? "#f0e6cc" : "#8a7c68",
-                        cursor: "pointer",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span>{mode.icon}</span>
-                        <div>
-                          <div style={{ fontSize: 12, fontWeight: 800 }}>
-                            {mode.label}
-                          </div>
-                          <div style={{ fontSize: 10, color: "#5a4f3f" }}>
-                            {mode.desc}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
+                <span>🗂️ Case scope:</span>
+                <select
+                  value={selectedCaseId ?? ""}
+                  onChange={(event) =>
+                    setSelectedCaseId(event.target.value ? Number(event.target.value) : null)
+                  }
+                  style={{
+                    flex: 1,
+                    padding: "7px 10px",
+                    borderRadius: 10,
+                    border: "1px solid rgba(201,169,110,0.18)",
+                    background: "rgba(255,255,255,0.03)",
+                    color: "#e0d2ba",
+                    fontSize: 12,
+                    outline: "none",
+                  }}
+                >
+                  <option value="">All documents (whole firm)</option>
+                  {cases.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title}
+                      {c.client_name ? ` · ${c.client_name}` : ""} ({c.status})
+                    </option>
+                  ))}
+                </select>
               </div>
+
+              {selectedCaseId != null && (
+                <p style={{ marginBottom: 10, fontSize: 11, color: "#5a4f3f" }}>
+                  Answers will be based on documents linked to this case.
+                </p>
+              )}
 
               {documentName && (
                 <div

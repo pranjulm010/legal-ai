@@ -8,47 +8,16 @@ import {
   completeReminder,
   createReminder,
   deleteCase,
+  deleteDocument,
   getCase,
   listCaseActivities,
   postCaseComment,
-  sendMessage,
   updateCase,
   uploadDocument,
   type CaseActivity,
   type CaseDetail,
   type Reminder,
-  type ResearchStep,
 } from "@/lib/api";
-
-type SourceItem = {
-  source_type?: string;
-  document_id?: string;
-  document_name?: string;
-  page_number?: number | null;
-  confidence_percent?: number | null;
-  source_site?: string;
-  title?: string;
-  url?: string;
-};
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  awaitingWebConfirm?: boolean;
-  originalQuestion?: string;
-  researchSteps?: ResearchStep[] | null;
-  sources?: SourceItem[];
-  route?: string | null;
-  confidenceLevel?: string | null;
-};
-
-const ROUTE_LABELS: Record<string, string> = {
-  uploaded_document: "Uploaded Document",
-  firm_database: "Firm Database",
-  web_search: "Trusted Web Search",
-  llm_knowledge: "General AI Knowledge",
-};
 
 const STATUSES = ["open", "in_progress", "on_hold", "closed"];
 
@@ -67,6 +36,7 @@ export default function CaseDetailPage() {
   const { user } = useAuth();
   const canEditCase = hasPermission(user?.role, "edit_case");
   const canDeleteCase = hasPermission(user?.role, "delete_case");
+  const canDeleteDocument = hasPermission(user?.role, "delete_document");
 
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,14 +49,8 @@ export default function CaseDetailPage() {
   const [reminderDue, setReminderDue] = useState("");
   const [addingReminder, setAddingReminder] = useState(false);
 
-  const [documentId, setDocumentId] = useState<string | null>(null);
-  const [documentName, setDocumentName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [question, setQuestion] = useState("");
-  const [asking, setAsking] = useState(false);
-  const [useAgent, setUseAgent] = useState(false);
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
 
   const [activities, setActivities] = useState<CaseActivity[]>([]);
   const [commentBody, setCommentBody] = useState("");
@@ -190,160 +154,35 @@ export default function CaseDetailPage() {
     setUploading(true);
 
     try {
-      const data = await uploadDocument(file, "anonymous", caseId);
-      const newDocumentId =
-        data.document_id || data.documentId || data.id || null;
-      const newDocumentName = data.file_name || data.filename || file.name;
-
-      setDocumentId(newDocumentId);
-      setDocumentName(newDocumentName);
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Document uploaded: ${newDocumentName}. Ask a question about it below.`,
-        },
-      ]);
+      await uploadDocument(file, "anonymous", caseId);
+      // Reload the case so the newly-linked document appears in the
+      // persistent Documents list below (it survives a page refresh
+      // because it's read from caseDetail.documents, not upload state).
+      loadCase();
       loadActivities();
     } catch (error: any) {
       console.error("Upload error:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: error?.response?.data?.error || "Document upload failed. Please try again.",
-        },
-      ]);
     } finally {
       setUploading(false);
     }
   };
 
-  const handleAsk = async () => {
-    const text = question.trim();
-    if (!text || asking) return;
-
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", content: text }]);
-    setQuestion("");
-    setAsking(true);
-
-    try {
-      const data = await sendMessage({
-        question: text,
-        documentId,
-        caseId: caseId ? Number(caseId) : null,
-        useAgent,
-        useAdvancedAgent: !useAgent,
-      });
-
-      if (data?.needs_web_confirmation) {
-        const fallbackNote = documentId
-          ? "No relevant information found in this document. Search the web for public legal sources?"
-          : "No relevant information found in your firm's documents. Search the web for public legal sources?";
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: data.answer && data.answer.trim() ? data.answer : fallbackNote,
-            awaitingWebConfirm: true,
-            originalQuestion: text,
-            researchSteps: data.research_steps,
-          },
-        ]);
-        return;
-      }
-
-      const answer = data?.answer || "No answer returned.";
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: answer,
-          researchSteps: data.research_steps,
-          sources: data.sources as SourceItem[] | undefined,
-          route: data.route,
-          confidenceLevel: data.confidence_level,
-        },
-      ]);
-    } catch (error: any) {
-      console.error("Ask question error:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: error?.response?.data?.error || "Something went wrong answering that question. Please try again.",
-        },
-      ]);
-    } finally {
-      setAsking(false);
-    }
-  };
-
-  const handleWebConfirm = async (
-    messageId: string,
-    originalQuestion: string,
-    confirmed: boolean
-  ) => {
-    setMessages((prev) =>
-      prev.map((message) =>
-        message.id === messageId ? { ...message, awaitingWebConfirm: false } : message
-      )
-    );
-
-    if (!confirmed) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Understood — I won't search the web for this question.",
-        },
-      ]);
+  const handleDeleteDocument = async (documentId: string, fileName: string) => {
+    if (!confirm(`Remove "${fileName}" from this case? This deletes the document and cannot be undone.`)) {
       return;
     }
 
-    setAsking(true);
+    setDeletingDocumentId(documentId);
 
     try {
-      const data = await sendMessage({
-        question: originalQuestion,
-        documentId,
-        caseId: caseId ? Number(caseId) : null,
-        allowWebSearch: true,
-        useAgent,
-        useAdvancedAgent: !useAgent,
-      });
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data?.answer || "No answer returned.",
-          researchSteps: data.research_steps,
-          sources: data.sources as SourceItem[] | undefined,
-          route: data.route,
-          confidenceLevel: data.confidence_level,
-        },
-      ]);
-    } catch (error: any) {
-      console.error("Web search error:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: error?.response?.data?.error || "Web search failed. Please try again.",
-        },
-      ]);
+      await deleteDocument(documentId);
+      loadCase();
+      loadActivities();
+    } catch (error) {
+      console.error("Delete document error:", error);
+      alert("Couldn't delete that document. Please try again.");
     } finally {
-      setAsking(false);
+      setDeletingDocumentId(null);
     }
   };
 
@@ -486,7 +325,7 @@ export default function CaseDetailPage() {
         </section>
 
         <section className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
-          <h2 className="mb-3 font-semibold text-[#f0e6cc]">Documents &amp; chat</h2>
+          <h2 className="mb-3 font-semibold text-[#f0e6cc]">Documents</h2>
 
           <input
             ref={fileInputRef}
@@ -502,152 +341,36 @@ export default function CaseDetailPage() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="mb-3 rounded-lg border border-[#c9a96e]/15 px-3 py-2 text-sm text-[#c9a96e] disabled:opacity-50"
+            className="rounded-lg border border-[#c9a96e]/15 px-3 py-2 text-sm text-[#c9a96e] disabled:opacity-50"
           >
             {uploading ? "Uploading..." : "📎 Upload document"}
           </button>
 
-          {documentName && (
-            <p className="mb-3 text-xs text-[#8a7c68]">Active document: {documentName}</p>
+          {caseDetail.documents.length === 0 ? (
+            <p className="mt-3 text-xs text-[#5a4f3f]">
+              No documents linked to this case yet.
+            </p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-2">
+              {caseDetail.documents.map((doc) => (
+                <li
+                  key={doc.document_id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-[#c9a96e]/12 bg-[#c9a96e]/5 px-3 py-2 text-xs text-[#cfc0a4]"
+                >
+                  <span className="min-w-0 break-words">📄 {doc.file_name}</span>
+                  {canDeleteDocument && (
+                    <button
+                      onClick={() => handleDeleteDocument(doc.document_id, doc.file_name)}
+                      disabled={deletingDocumentId === doc.document_id}
+                      className="shrink-0 rounded-md border border-red-400/25 px-2 py-1 text-[11px] text-red-300 hover:bg-red-400/10 disabled:opacity-50"
+                    >
+                      {deletingDocumentId === doc.document_id ? "Deleting..." : "Delete"}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
-
-          <label className="mb-3 flex items-center gap-2 text-xs text-[#8a7c68]">
-            <input
-              type="checkbox"
-              checked={useAgent}
-              onChange={(event) => setUseAgent(event.target.checked)}
-            />
-            🧠 Research agent (breaks question into sub-questions)
-          </label>
-
-          <div className="mb-3 flex max-h-64 flex-col gap-2 overflow-y-auto">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`rounded-lg px-3 py-2 text-sm ${
-                  message.role === "user"
-                    ? "self-end bg-[#162750] text-[#b8ccec]"
-                    : "bg-[#14100a] text-[#cfc0a4]"
-                }`}
-              >
-                {message.content}
-                {message.awaitingWebConfirm && (
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      onClick={() =>
-                        handleWebConfirm(message.id, message.originalQuestion || "", true)
-                      }
-                      className="rounded-full bg-[#c9a96e] px-3 py-1 text-xs font-semibold text-[#1a0e00]"
-                    >
-                      Yes, search the web
-                    </button>
-                    <button
-                      onClick={() =>
-                        handleWebConfirm(message.id, message.originalQuestion || "", false)
-                      }
-                      className="rounded-full border border-[#c9a96e]/20 px-3 py-1 text-xs text-[#8a7c68]"
-                    >
-                      No
-                    </button>
-                  </div>
-                )}
-                {message.researchSteps && message.researchSteps.length > 0 && (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-[11px] text-[#8a7c68]">
-                      🧠 Research steps ({message.researchSteps.length})
-                    </summary>
-                    <ul className="mt-1 flex flex-col gap-1 pl-4">
-                      {message.researchSteps.map((step, index) => (
-                        <li key={index} className="text-[11px] text-[#5a4f3f]">
-                          {step.source_type === "document" && "📄 "}
-                          {step.source_type === "web" && "🌐 "}
-                          {step.source_type === "pending_web" && "⏳ "}
-                          {step.source_type === "unresolved" && "❌ "}
-                          {step.source_type === "case" && "🗂️ "}
-                          {step.source_type === "draft" && "📝 "}
-                          {step.source_type === "compare" && "🔍 "}
-                          {step.source_type === "context" && "🧭 "}
-                          {step.sub_question}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-                {message.sources && message.sources.length > 0 && (() => {
-                  const bestByDocument = new Map<string, SourceItem>();
-                  for (const s of message.sources!) {
-                    if (s.source_type !== "document" || !s.document_name) continue;
-                    const existing = bestByDocument.get(s.document_name);
-                    const better =
-                      !existing || (s.confidence_percent ?? -1) > (existing.confidence_percent ?? -1);
-                    if (better) bestByDocument.set(s.document_name, s);
-                  }
-                  const docEntries = Array.from(bestByDocument.values());
-                  const webSources = message.sources!.filter((s) => s.source_type === "web" && s.url);
-
-                  if (docEntries.length === 0 && webSources.length === 0) return null;
-
-                  return (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {docEntries.map((s) => (
-                        <span
-                          key={s.document_name}
-                          title={
-                            s.confidence_percent != null ? `Confidence: ${s.confidence_percent}%` : undefined
-                          }
-                          className="rounded-full border border-[#c9a96e]/20 bg-[#c9a96e]/5 px-2 py-0.5 text-[10px] text-[#c9a96e]"
-                        >
-                          📄 {s.document_name}
-                          {s.page_number ? ` · p.${s.page_number}` : ""}
-                          {s.confidence_percent != null ? ` · ${s.confidence_percent}%` : ""}
-                        </span>
-                      ))}
-                      {webSources.map((s, index) => (
-                        <a
-                          key={index}
-                          href={s.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-full border border-blue-400/20 bg-blue-400/5 px-2 py-0.5 text-[10px] text-blue-300 no-underline"
-                        >
-                          🌐 {s.source_site || s.title || "Web source"}
-                        </a>
-                      ))}
-                    </div>
-                  );
-                })()}
-                {message.route && (
-                  <div className="mt-2 flex flex-wrap gap-1 border-t border-[#c9a96e]/10 pt-1.5 text-[10px] text-[#5a4f3f]">
-                    <span className="text-[#8a7c68]">Source Summary —</span>
-                    <span>Route: {ROUTE_LABELS[message.route] || message.route}</span>
-                    {message.confidenceLevel && <span>· Confidence: {message.confidenceLevel}</span>}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div className="flex gap-2">
-            <input
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleAsk();
-                }
-              }}
-              placeholder={documentId ? "Ask a question about this document..." : "Ask a question about this case..."}
-              className="flex-1 rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50 disabled:opacity-50"
-            />
-            <button
-              onClick={handleAsk}
-              disabled={asking || !question.trim()}
-              className="rounded-lg bg-[#c9a96e] px-4 py-2 text-sm font-semibold text-[#1a0e00] disabled:opacity-50"
-            >
-              {asking ? "..." : "Ask"}
-            </button>
-          </div>
         </section>
       </div>
 
