@@ -1,3 +1,4 @@
+import re
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -51,6 +52,26 @@ from rag.vector_store import delete_document_chunks
 
 
 api = NinjaAPI(title="Legal AI RAG API")
+
+
+# A question asked WHILE a document is attached that refers to "this type of
+# case", "such/similar a case", "cases like this", or "have we handled ...
+# this/such/similar case" is about the ATTACHED document's subject, not a
+# firm-wide meta breakdown. Reproduced live: with a case file attached, "is
+# it we handle this type of case earlier" got hijacked by the firm-stats
+# shortcut into a blind category breakdown that ignored the document
+# entirely. When this matches and a document is attached, skip the firm-wide
+# shortcut so the document-aware agent can read the file, identify its case
+# type, and cross-reference the firm's own cases before answering.
+_DOC_RELATIVE_CASE_RE = re.compile(
+    r"\bthis\s+(?:type|kind|sort)\s+of\s+case\b"
+    r"|\b(?:such|similar)\s+(?:a\s+)?cases?\b"
+    r"|\bcases?\s+like\s+this\b"
+    r"|\blike\s+this\s+case\b"
+    r"|\bhandled?\b.*\b(?:this|such|similar)\b.*\bcase"
+    r"|\bcase\b.*\b(?:before|earlier|previously)\b",
+    re.I,
+)
 
 
 SUPPORTED_DOCUMENT_TYPES = [
@@ -360,10 +381,16 @@ def ask_question(request, payload: AskQuestionSchema):
 
         stats_query_text = _resolve_collection_followup(question, history) or question
 
+        # A document-relative "do we handle this type of case" question must
+        # NOT be answered by the firm-wide stats shortcut (which would give a
+        # blind category breakdown ignoring the attached document); let the
+        # document-aware agent handle it instead - see _DOC_RELATIVE_CASE_RE.
+        doc_relative = document is not None and bool(_DOC_RELATIVE_CASE_RE.search(question))
+
         stats_answer = None
         resolved_case_id = None
         is_cases_query = False
-        if not effective_case_id:
+        if not effective_case_id and not doc_relative:
             stats_answer, resolved_case_id, is_cases_query = try_answer_firm_stats(stats_query_text, request.auth.firm)
 
         if stats_answer is not None:

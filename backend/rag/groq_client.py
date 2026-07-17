@@ -104,6 +104,26 @@ name here - they all mean ONE particular record, not the whole
 collection. Only classify as META when the user is asking for a count, a
 list, or a breakdown across the whole collection.
 
+IMPORTANT - the VERB decides intent, not just the word "case". A request
+to DESCRIBE / EXPLAIN / SUMMARIZE / TELL ME ABOUT / OPEN / SHOW THE DETAILS
+OF a case (or document) is a request to read out ONE record's full
+contents - this is NEVER a meta question, even when the user points at the
+case by its SUBJECT or TOPIC instead of its exact title (e.g. "describe
+the theft case", "tell me about the mobile case", "explain the property
+dispute case", "what happened in the land case", "describe this any
+theft-related case"). A topic/subject word like "theft", "mobile", "land",
+"accident" here is naming WHICH single case the user means, NOT a filter to
+list every case of that kind - so do NOT classify these as a "list" of
+cases. Set is_meta_question to false and entity to "none" for them; a
+different part of the system looks up that one case and describes it.
+META for cases stays limited to genuine aggregate wording - a COUNT ("how
+many cases"), a LIST of the collection ("list/show me my cases", "what
+cases do we have"), or a BREAKDOWN ("categorize cases by type"). If you're
+unsure whether a "... case" question wants ONE record described or the
+whole collection listed, prefer NON-META (false) - describing one case is
+the safe fall-through, wrongly listing every case is the exact failure
+this rule prevents.
+
 IMPORTANT: a question about cases can be filtered by TYPE (civil/criminal/
 corporate/family/property, e.g. "how many property cases") OR by STATUS
 (open/closed/in_progress/on_hold, e.g. "how many open cases", "do we have

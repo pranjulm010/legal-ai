@@ -143,8 +143,13 @@ def _cases_breakdown(firm, group_by: str) -> str:
     if not rows:
         return f"You have {total} case(s), but none have a {dimension_label} assigned yet."
 
-    parts = ", ".join(f"{label}: {count}" for label, count in rows)
-    return f"Case breakdown by {dimension_label} - {parts}. ({total} case(s) total.)"
+    # Emit markdown (bold header + one bullet per group) - the frontend's
+    # FormattedMessage renders "- " lines as bullets and "**...**" as bold,
+    # so a breakdown reads as a scannable list instead of one cramped line.
+    total_word = "case" if total == 1 else "cases"
+    header = f"**Case breakdown by {dimension_label}** ({total} {total_word} total):"
+    bullets = "\n".join(f"- {label}: {count}" for label, count in rows)
+    return f"{header}\n{bullets}"
 
 
 def _list_preview(names, noun_singular: str, noun_plural: str = "") -> str:
@@ -153,11 +158,16 @@ def _list_preview(names, noun_singular: str, noun_plural: str = "") -> str:
     if not names:
         return f"You have no {noun_plural} yet."
 
-    preview = ", ".join(names[:10])
-    remainder = f", and {len(names) - 10} more" if len(names) > 10 else ""
     noun = noun_singular if len(names) == 1 else noun_plural
 
-    return f"You have {len(names)} {noun}: {preview}{remainder}."
+    # Markdown list: a bold header line plus one "- " bullet per item, so
+    # the frontend renders a real bulleted list rather than a single
+    # comma-run that's hard to read. Long lists still cap at 10 shown, with
+    # a final line noting how many more there are.
+    header = f"**You have {len(names)} {noun}:**"
+    bullets = "\n".join(f"- {name}" for name in names[:10])
+    remainder = f"\n- …and {len(names) - 10} more" if len(names) > 10 else ""
+    return f"{header}\n{bullets}{remainder}"
 
 
 def _case_titles(firm):
@@ -652,6 +662,14 @@ _COLLECTION_PRONOUN_RE = re.compile(
     r"|\b(?:show|list|explain|summarize|describe|open)\s+(?:them|those|these)\b"
     r"|\btell me (?:about|more about)\s+(?:them|those|these)\b"
     r"|\bcan i see (?:them|those|these)\b"
+    # "show all" / "list all" / "show me all" / "see all" / "all of them" /
+    # "show everything" - a bare "show all" after a count answer ("6 open
+    # cases") means "list those same records", the same intent as "show
+    # them". Reproduced live: "show all" fell through firm-stats to the slow
+    # embedding-backed agent (and errored/hung) instead of just listing them.
+    r"|\b(?:show|list|see)\s+(?:me\s+)?all\b"
+    r"|\ball\s+of\s+(?:them|these|those)\b"
+    r"|^\s*(?:show|list)\s+everything\b"
     r"|\bwhich ones\b",
     re.I,
 )

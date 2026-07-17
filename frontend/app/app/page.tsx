@@ -112,6 +112,21 @@ function extractAnswer(data: any): string {
   );
 }
 
+// Renders **bold** spans inside a line of text. Used by both bullets and
+// paragraphs so inline bold works everywhere, not just in top-level paragraphs.
+function renderInlineBold(text: string) {
+  return text.split(/(\*\*.*?\*\*)/g).map((part, idx) => {
+    const isBold = part.startsWith("**") && part.endsWith("**");
+    return isBold ? (
+      <strong key={idx} style={{ color: "#f2dfb5", fontWeight: 700 }}>
+        {part.replace(/\*\*/g, "")}
+      </strong>
+    ) : (
+      <span key={idx}>{part}</span>
+    );
+  });
+}
+
 function FormattedMessage({ content }: { content: string }) {
   const lines = content.split("\n");
 
@@ -164,7 +179,7 @@ function FormattedMessage({ content }: { content: string }) {
               }}
             >
               <span style={{ color: "#c9a96e" }}>▸</span>
-              <span>{line.slice(2)}</span>
+              <span>{renderInlineBold(line.slice(2))}</span>
             </div>
           );
         }
@@ -1558,49 +1573,6 @@ export default function LexoraLegalChatPage() {
             }}
           >
             <div style={{ maxWidth: 820, margin: "0 auto" }}>
-              <div
-                style={{
-                  marginBottom: 10,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: 12,
-                  color: "#8a7c68",
-                }}
-              >
-                <span>🗂️ Case scope:</span>
-                <select
-                  value={selectedCaseId ?? ""}
-                  onChange={(event) =>
-                    setSelectedCaseId(event.target.value ? Number(event.target.value) : null)
-                  }
-                  style={{
-                    flex: 1,
-                    padding: "7px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(201,169,110,0.18)",
-                    background: "rgba(255,255,255,0.03)",
-                    color: "#e0d2ba",
-                    fontSize: 12,
-                    outline: "none",
-                  }}
-                >
-                  <option value="">All documents (whole firm)</option>
-                  {cases.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.title}
-                      {c.client_name ? ` · ${c.client_name}` : ""} ({c.status})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {selectedCaseId != null && (
-                <p style={{ marginBottom: 10, fontSize: 11, color: "#5a4f3f" }}>
-                  Answers will be based on documents linked to this case.
-                </p>
-              )}
-
               {documentName && (
                 <div
                   style={{

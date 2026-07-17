@@ -50,9 +50,26 @@ _PROPER_NOUN_RE = re.compile(r"\b(?:[A-Z][a-z]+\s+){0,3}[A-Z][a-z]+\b")
 # a specific fact), the relevance threshold doesn't apply - the document's
 # own selection is already the grounding.
 _WHOLE_DOCUMENT_ACTION_RE = re.compile(
-    r"\b(summarize|summarise|explain|analyz?e|review|describe)\b.{0,20}\b(this|the)\s+(document|file|case|contract|agreement)\b"
-    r"|\bwhat\s+(is|does)\s+(this|the)\s+(document|file)\b"
+    r"\b(summarize|summarise|explain|analyz?e|review|describe|overview)\b.{0,20}\b(this|the|its|it'?s)\s+(document|documents|doc|docs|file|files|case|contract|agreement)\b"
+    r"|\b(summarize|summarise|explain|analyz?e|review|describe)\s+(this|it|them|the\s+(?:doc|document|file))\b"
+    r"|\bwhat\s+(is|does)\s+(this|the)\s+(document|file|doc)\b"
     r"|\b(draft|prepare|write)\b.{0,40}\b(based on|from|using)\s+(this|it)\b",
+    re.I,
+)
+
+# A "do we handle this type of case / a similar case?" question asked with a
+# document attached needs that document's CONTENT returned - so the agent can
+# read the attached matter's type and cross-reference the firm's own cases -
+# even though this meta phrasing scores far from any single chunk and would
+# otherwise be filtered out by the relevance threshold as "nothing found"
+# (reproduced live: the attached case file came back empty, so the agent
+# never saw what kind of matter it was and fell back to asking for a case ID).
+_CASE_TYPE_REFERENCE_RE = re.compile(
+    r"\bthis\s+(?:type|kind|sort)\s+of\s+case\b"
+    r"|\b(?:such|similar)\s+(?:a\s+)?cases?\b"
+    r"|\bcases?\s+like\s+this\b"
+    r"|\bhandled?\b.*\bcase"
+    r"|\bhandle\b.*\bcase",
     re.I,
 )
 
@@ -189,7 +206,19 @@ def tool_search_documents(
     # something based on it") - the relevance threshold below exists to
     # catch a genuinely UNRELATED topic slipping through as a false
     # "found", not to second-guess the user's own choice of document.
-    skip_threshold = bool(document_id) and bool(_WHOLE_DOCUMENT_ACTION_RE.search(query))
+    # A whole-document action ("describe/summarize the doc") is grounded by
+    # the document's own selection - whether the user attached it directly
+    # (document_id) or it's the active case's own linked document(s)
+    # (case_document_ids). In both cases the relevance threshold must NOT
+    # drop it as "nothing found" just because a whole-document request isn't
+    # worded like any single chunk. Reproduced live: "describe the doc" on a
+    # case whose only file was fir.pdf returned found=False, so the agent had
+    # no content and errored out instead of summarizing the report.
+    scoped_to_specific_docs = bool(document_id) or bool(case_document_ids)
+    skip_threshold = (
+        (scoped_to_specific_docs and bool(_WHOLE_DOCUMENT_ACTION_RE.search(query)))
+        or (bool(document_id) and bool(_CASE_TYPE_REFERENCE_RE.search(query)))
+    )
 
     threshold = _settings.RAG_RELEVANCE_DISTANCE_THRESHOLD
     if not skip_threshold:
@@ -223,11 +252,51 @@ def tool_search_documents(
         result = {"found": False, "context": ""}
         if fallback_note:
             result["note"] = fallback_note
+        else:
+            # A scoped document that produced no chunks is often not "not
+            # relevant" but "never processed" - a scanned/image PDF whose OCR
+            # failed (e.g. poppler/tesseract missing) has status="failed" and
+            # zero searchable text. Surface that explicitly so the agent
+            # reports the processing failure plainly instead of flailing with
+            # its tools (reproduced live: "describe the doc" on a case whose
+            # only file failed OCR looped into a generic tool error).
+            from api.models import UploadedDocument as _UploadedDocument
+
+            failed_qs = _UploadedDocument.objects.filter(firm_id=firm_id, status="failed")
+            if document_id:
+                failed_qs = failed_qs.filter(document_id=document_id)
+            elif case_id:
+                failed_qs = failed_qs.filter(case_id=case_id)
+            else:
+                failed_qs = _UploadedDocument.objects.none()
+
+            failed_names = list(failed_qs.values_list("original_name", flat=True))
+            if failed_names:
+                result["note"] = (
+                    "The document(s) in scope could not be processed and have no "
+                    f"searchable text: {', '.join(failed_names)}. This usually means "
+                    "a scanned or image PDF whose text extraction/OCR failed. Tell "
+                    "the user plainly that this document failed to process, so its "
+                    "contents can't be read or summarized - do NOT invent or guess "
+                    "its contents."
+                )
         return result
+
+    # The strongest (smallest) match distance among the chunks we're
+    # returning. Callers use this to tell a genuinely relevant local match
+    # apart from a boilerplate near-miss that merely squeaked under the
+    # loose answer-relevance threshold - e.g. a rental agreement's
+    # "governing law and jurisdiction" clause scoring ~0.69 against an
+    # unrelated "Supreme Court guidelines on bail" question. An exact
+    # keyword-substring hit carries the synthetic best-possible score 0.0,
+    # so it correctly reads as strong grounding here.
+    chunk_scores = [c.get("score") for c in chunks if c.get("score") is not None]
+    best_score = min(chunk_scores) if chunk_scores else None
 
     return {
         "found": True,
         "context": _build_context(chunks),
+        "best_score": best_score,
         **({"note": fallback_note} if fallback_note else {}),
         "_sources": [
             {
