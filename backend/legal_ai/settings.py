@@ -16,6 +16,18 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
+
+# Load the local sentence-transformers embedding model from cache without
+# contacting the HuggingFace Hub on every startup. Without this, an HF Hub
+# outage (reproduced live: HTTP 504s / connection timeouts to huggingface.co)
+# makes the model do a slow online HEAD check with 5 retries and backoff on
+# EVERY embedding-backed request, so document/agent questions hang for
+# minutes even though the model is already downloaded locally. Uses
+# setdefault so a fresh machine that still needs to download the model once
+# can override it with HF_HUB_OFFLINE=0 in the environment.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -161,6 +173,23 @@ EMBEDDING_MODEL = os.getenv(
 
 RAG_RELEVANCE_DISTANCE_THRESHOLD = float(
     os.getenv("RAG_RELEVANCE_DISTANCE_THRESHOLD", "0.72")
+)
+
+# A stricter distance cutoff used ONLY to decide "does the firm actually
+# have a genuinely relevant local document for this question?" - the
+# question that gates whether the agent offers a web search. The main
+# threshold above (0.72) is deliberately loose so the answer pipeline still
+# feeds borderline context to the LLM, but it's too loose for the
+# grounding/web-consent decision: boilerplate clauses present in almost
+# every contract (governing law, jurisdiction, termination) are semantic
+# near-misses for any legal-sounding question and score ~0.55-0.70, just
+# under 0.72. Measured live, genuinely relevant matches land <=0.45 while
+# off-topic boilerplate lands >=0.55, so 0.55 cleanly separates them. When
+# the best local match is weaker than this, the agent treats the question
+# as "nothing relevant found locally" and offers a web search instead of
+# silently answering from the model's own general knowledge.
+RAG_STRONG_GROUNDING_DISTANCE_THRESHOLD = float(
+    os.getenv("RAG_STRONG_GROUNDING_DISTANCE_THRESHOLD", "0.55")
 )
 
 SIMPLE_JWT = {
