@@ -365,11 +365,13 @@ export default function TeamPage() {
                   {lawyer.email} · {lawyer.is_active ? "Active" : "Deactivated"}
                   {lawyer.department && ` · ${lawyer.department}`}
                 </p>
-                <p className="text-xs text-[#5a4f3f]">
-                  {lawyer.last_login
-                    ? `Last login: ${new Date(lawyer.last_login).toLocaleString()}`
-                    : "Last login: never signed in"}
-                </p>
+                {isAdmin && (
+                  <p className="text-xs text-[#5a4f3f]">
+                    {lawyer.last_login
+                      ? `Last login: ${new Date(lawyer.last_login).toLocaleString()}`
+                      : "Last login: never signed in"}
+                  </p>
+                )}
               </div>
 
               {isAdmin ? (
