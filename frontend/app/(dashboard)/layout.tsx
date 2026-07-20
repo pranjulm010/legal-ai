@@ -77,6 +77,7 @@ export default function DashboardLayout({
             {navItem("/cases", "Cases")}
             {navItem("/documents", "Documents")}
             {navItem("/drafts", "Drafts")}
+            {navItem("/templates", "Templates")}
             {navItem("/contacts", "Contacts")}
             {navItem("/knowledge", "Knowledge")}
             {navItem("/team", "Team")}

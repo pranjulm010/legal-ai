@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import Draft, RedlineSuggestion
+from .models import Draft, DraftTemplate, RedlineSuggestion
+
+
+@admin.register(DraftTemplate)
+class DraftTemplateAdmin(admin.ModelAdmin):
+    list_display = ("name", "firm", "version", "created_by", "updated_at")
+    list_filter = ("firm",)
+    search_fields = ("name",)
 
 
 class RedlineSuggestionInline(admin.TabularInline):

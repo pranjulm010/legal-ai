@@ -803,9 +803,79 @@ export const generateDraft = async (payload: {
   title: string;
   prompt: string;
   case_id?: number | string;
+  template_id?: number | string;
+  placeholder_values?: Record<string, string>;
 }): Promise<DraftDetail> => {
   const response = await api.post("/drafts/generate/", payload);
   return response.data;
+};
+
+// ---------------------------------------------------------------------------
+// Draft templates (reusable formats distilled from a sample document)
+// ---------------------------------------------------------------------------
+
+export interface TemplatePlaceholder {
+  name: string;
+  description: string;
+}
+
+export interface TemplateListItem {
+  id: number;
+  name: string;
+  description: string;
+  version: number;
+  placeholder_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateDetail {
+  id: number;
+  name: string;
+  description: string;
+  sample_original_name: string;
+  extracted_structure: string;
+  tone: string;
+  formatting_rules: string;
+  placeholders: TemplatePlaceholder[];
+  ai_prompt: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const listTemplates = async (): Promise<TemplateListItem[]> => {
+  const response = await api.get("/drafts/templates/");
+  return response.data;
+};
+
+export const getTemplate = async (
+  templateId: number | string
+): Promise<TemplateDetail> => {
+  const response = await api.get(`/drafts/templates/${templateId}/`);
+  return response.data;
+};
+
+export const createTemplate = async (payload: {
+  name: string;
+  description?: string;
+  file: File;
+}): Promise<TemplateDetail> => {
+  const formData = new FormData();
+  formData.append("name", payload.name);
+  formData.append("description", payload.description || "");
+  formData.append("file", payload.file);
+
+  const response = await api.post("/drafts/templates/", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return response.data;
+};
+
+export const deleteTemplate = async (
+  templateId: number | string
+): Promise<void> => {
+  await api.delete(`/drafts/templates/${templateId}/`);
 };
 
 export const generateRedline = async (payload: {

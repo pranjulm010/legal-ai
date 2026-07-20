@@ -1,8 +1,10 @@
 from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from django.http import HttpResponse
-from ninja import Router, Schema
+from ninja import File, Form, Router, Schema
+from ninja.files import UploadedFile
 
 from accounts.audit import log_audit_event
 from accounts.auth import JWTAuth
@@ -10,11 +12,16 @@ from accounts.permissions import require_permission
 from api.models import UploadedDocument
 from cases.models import Case, CaseActivity
 from rag.document_processor import extract_text_from_document
-from rag.drafting import generate_draft, generate_redline_suggestions
+from rag.drafting import analyze_template, generate_draft, generate_redline_suggestions
 from .export import build_docx_bytes, build_pdf_bytes
-from .models import Draft, RedlineSuggestion
+from .models import Draft, DraftTemplate, RedlineSuggestion
 
 draft_router = Router(auth=JWTAuth())
+
+# Sample documents a template can be distilled from. Kept to the text-bearing
+# formats extract_text_from_document handles well - a template needs readable
+# structure, so images/scans are intentionally excluded here.
+TEMPLATE_SAMPLE_TYPES = ["pdf", "docx", "txt", "md"]
 
 
 class ErrorSchema(Schema):
@@ -30,6 +37,48 @@ class GenerateDraftSchema(Schema):
     title: str
     prompt: str
     case_id: Optional[int] = None
+    template_id: Optional[int] = None
+    placeholder_values: Optional[Dict[str, str]] = None
+
+
+class PlaceholderSchema(Schema):
+    name: str
+    description: str = ""
+
+
+class TemplateListItemSchema(Schema):
+    id: int
+    name: str
+    description: str
+    version: int
+    placeholder_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TemplateDetailSchema(Schema):
+    id: int
+    name: str
+    description: str
+    sample_original_name: str
+    extracted_structure: str
+    tone: str
+    formatting_rules: str
+    placeholders: List[PlaceholderSchema]
+    ai_prompt: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpdateTemplateSchema(Schema):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    extracted_structure: Optional[str] = None
+    tone: Optional[str] = None
+    formatting_rules: Optional[str] = None
+    placeholders: Optional[List[PlaceholderSchema]] = None
+    ai_prompt: Optional[str] = None
 
 
 class GenerateRedlineSchema(Schema):
@@ -117,6 +166,35 @@ def _serialize_draft_detail(draft: Draft) -> dict:
     }
 
 
+def _serialize_template_list_item(template: DraftTemplate) -> dict:
+    return {
+        "id": template.id,
+        "name": template.name,
+        "description": template.description,
+        "version": template.version,
+        "placeholder_count": len(template.placeholders or []),
+        "created_at": template.created_at,
+        "updated_at": template.updated_at,
+    }
+
+
+def _serialize_template_detail(template: DraftTemplate) -> dict:
+    return {
+        "id": template.id,
+        "name": template.name,
+        "description": template.description,
+        "sample_original_name": template.sample_original_name,
+        "extracted_structure": template.extracted_structure,
+        "tone": template.tone,
+        "formatting_rules": template.formatting_rules,
+        "placeholders": template.placeholders or [],
+        "ai_prompt": template.ai_prompt,
+        "version": template.version,
+        "created_at": template.created_at,
+        "updated_at": template.updated_at,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -132,10 +210,153 @@ def list_drafts(request, case_id: Optional[int] = None):
     return [_serialize_draft_list_item(draft) for draft in drafts.order_by("-updated_at")]
 
 
-# NOTE: literal-path routes (/generate/, /redline/, /suggestions/{id}/) must
-# be registered before the dynamic /{draft_id}/ routes below - Django's URL
-# resolver tries patterns in registration order, and /{draft_id}/ would
-# otherwise greedily capture "generate"/"redline"/"suggestions" as a draft_id.
+# NOTE: literal-path routes (/templates/, /generate/, /redline/,
+# /suggestions/{id}/) must be registered before the dynamic /{draft_id}/
+# routes below - Django's URL resolver tries patterns in registration order,
+# and /{draft_id}/ would otherwise greedily capture "templates"/"generate"/
+# "redline"/"suggestions" as a draft_id.
+
+
+# ---- Templates ------------------------------------------------------------
+
+
+@draft_router.get("/templates/", response={200: List[TemplateListItemSchema]})
+def list_templates(request):
+    templates = DraftTemplate.objects.filter(firm=request.auth.firm)
+    return [_serialize_template_list_item(template) for template in templates]
+
+
+@draft_router.post(
+    "/templates/",
+    response={201: TemplateDetailSchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def create_template(
+    request,
+    file: UploadedFile = File(...),
+    name: str = Form(...),
+    description: str = Form(""),
+):
+    denied = require_permission(request, "generate_draft")
+    if denied:
+        return denied
+
+    if not name.strip():
+        return 400, {"error": "Template name is required."}
+
+    if not file:
+        return 400, {"error": "A sample document is required."}
+
+    file_type = Path(file.name).suffix.lower().replace(".", "")
+    if file_type not in TEMPLATE_SAMPLE_TYPES:
+        return 400, {
+            "error": "Unsupported sample type. Upload a PDF, DOCX, TXT, or MD file."
+        }
+
+    # Persist first so extract_text_from_document can read a real file path.
+    template = DraftTemplate.objects.create(
+        firm=request.auth.firm,
+        name=name.strip(),
+        description=description.strip(),
+        sample_file=file,
+        sample_original_name=file.name,
+        created_by=request.auth,
+    )
+
+    try:
+        sample_text = extract_text_from_document(
+            file_path=template.sample_file.path,
+            document_type=file_type,
+        )
+    except (FileNotFoundError, ValueError) as error:
+        template.delete()
+        return 400, {"error": f"Could not read the sample document: {error}"}
+
+    if not sample_text.strip():
+        template.delete()
+        return 400, {"error": "The sample document appears to have no readable text."}
+
+    analysis = analyze_template(sample_text)
+
+    template.sample_text = sample_text
+    template.extracted_structure = analysis["extracted_structure"]
+    template.tone = analysis["tone"]
+    template.formatting_rules = analysis["formatting_rules"]
+    template.placeholders = analysis["placeholders"]
+    template.ai_prompt = analysis["ai_prompt"]
+    template.save()
+
+    log_audit_event(request.auth.firm, request.auth, "template_created", template.name)
+
+    return 201, _serialize_template_detail(template)
+
+
+@draft_router.get(
+    "/templates/{template_id}/",
+    response={200: TemplateDetailSchema, 404: ErrorSchema},
+)
+def get_template(request, template_id: int):
+    try:
+        template = DraftTemplate.objects.get(id=template_id, firm=request.auth.firm)
+    except DraftTemplate.DoesNotExist:
+        return 404, {"error": "Template not found."}
+
+    return 200, _serialize_template_detail(template)
+
+
+@draft_router.patch(
+    "/templates/{template_id}/",
+    response={200: TemplateDetailSchema, 403: ErrorSchema, 404: ErrorSchema},
+)
+def update_template(request, template_id: int, payload: UpdateTemplateSchema):
+    denied = require_permission(request, "generate_draft")
+    if denied:
+        return denied
+
+    try:
+        template = DraftTemplate.objects.get(id=template_id, firm=request.auth.firm)
+    except DraftTemplate.DoesNotExist:
+        return 404, {"error": "Template not found."}
+
+    data = payload.dict(exclude_unset=True)
+
+    if "placeholders" in data and data["placeholders"] is not None:
+        data["placeholders"] = [
+            {"name": item["name"], "description": item.get("description", "")}
+            for item in data["placeholders"]
+        ]
+
+    for field, value in data.items():
+        setattr(template, field, value)
+
+    # Any edit to the saved template is a new revision.
+    template.version += 1
+    template.save()
+
+    return 200, _serialize_template_detail(template)
+
+
+@draft_router.delete(
+    "/templates/{template_id}/",
+    response={204: None, 403: ErrorSchema, 404: ErrorSchema},
+)
+def delete_template(request, template_id: int):
+    denied = require_permission(request, "generate_draft")
+    if denied:
+        return denied
+
+    try:
+        template = DraftTemplate.objects.get(id=template_id, firm=request.auth.firm)
+    except DraftTemplate.DoesNotExist:
+        return 404, {"error": "Template not found."}
+
+    template_name = template.name
+    template.delete()
+    log_audit_event(request.auth.firm, request.auth, "template_deleted", template_name)
+
+    return 204, None
+
+
+# ---- Drafts ---------------------------------------------------------------
 
 
 @draft_router.post(
@@ -154,12 +375,37 @@ def generate_draft_endpoint(request, payload: GenerateDraftSchema):
         except Case.DoesNotExist:
             return 400, {"error": "Case not found for this firm."}
 
+    template = None
+    template_dict = None
+
+    if payload.template_id:
+        try:
+            template = DraftTemplate.objects.get(
+                id=payload.template_id, firm=request.auth.firm
+            )
+        except DraftTemplate.DoesNotExist:
+            return 400, {"error": "Template not found for this firm."}
+
+        template_dict = {
+            "extracted_structure": template.extracted_structure,
+            "tone": template.tone,
+            "formatting_rules": template.formatting_rules,
+            "placeholders": template.placeholders or [],
+            "ai_prompt": template.ai_prompt,
+        }
+
     context = case.description if case else ""
-    content = generate_draft(prompt=payload.prompt, context=context)
+    content = generate_draft(
+        prompt=payload.prompt,
+        context=context,
+        template=template_dict,
+        placeholder_values=payload.placeholder_values,
+    )
 
     draft = Draft.objects.create(
         firm=request.auth.firm,
         case=case,
+        template=template,
         draft_type="draft",
         title=payload.title,
         prompt=payload.prompt,
