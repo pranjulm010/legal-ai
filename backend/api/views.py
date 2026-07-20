@@ -387,13 +387,50 @@ def ask_question(request, payload: AskQuestionSchema):
         # document-aware agent handle it instead - see _DOC_RELATIVE_CASE_RE.
         doc_relative = document is not None and bool(_DOC_RELATIVE_CASE_RE.search(question))
 
+        # Semantic-first routing: one intent-router call understands what the
+        # user actually wants (an aggregate firm-data question, a genuinely
+        # ambiguous request that needs clarifying, or something for the
+        # agent), instead of relying on keyword/regex matching. The result is
+        # reused by try_answer_firm_stats below so the router runs only once.
         stats_answer = None
         resolved_case_id = None
         is_cases_query = False
-        if not effective_case_id and not doc_relative:
-            stats_answer, resolved_case_id, is_cases_query = try_answer_firm_stats(stats_query_text, request.auth.firm)
+        clarification = None
 
-        if stats_answer is not None:
+        # When the conversation is already scoped to one specific case, routing
+        # always goes to the case-aware agent - so the router call would be
+        # wasted. Only run it when a top-level routing decision is actually
+        # needed (no active case).
+        if not effective_case_id:
+            from rag.groq_client import classify_intent
+
+            classification = classify_intent(
+                stats_query_text,
+                history=history,
+                has_document=document is not None,
+                has_case=False,
+            )
+
+            # Only ask a clarifying question when the intent is genuinely
+            # ambiguous (the router is instructed to be conservative and to
+            # lean away from clarify when a document is attached).
+            if classification.get("intent") == "clarify":
+                clarification = str(classification.get("clarification_question", "")).strip() or None
+
+            if clarification is None and not doc_relative:
+                stats_answer, resolved_case_id, is_cases_query = try_answer_firm_stats(
+                    stats_query_text, request.auth.firm, classification=classification
+                )
+
+        if clarification is not None:
+            result = {
+                "answer": clarification,
+                "sources": [],
+                "needs_web_confirmation": False,
+                "route": "clarification",
+                "confidence_level": None,
+            }
+        elif stats_answer is not None:
             result = {
                 "answer": stats_answer,
                 "sources": [],

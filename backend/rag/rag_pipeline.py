@@ -276,26 +276,34 @@ def _llm_knowledge_result(question, answer_mode, history, disclaimer: str) -> Di
     }
 
 
+# Shown when local search (uploaded document and/or firm database) comes up
+# empty. The platform intentionally does NOT offer to run a web search on the
+# user's behalf here - it tells them nothing is on file and leaves searching
+# the web up to them. Kept as a single constant so the deterministic pipeline
+# and the tool-calling agent stay in sync.
+NOT_FOUND_LOCALLY_MESSAGE = (
+    "Sorry, I don't have anything about this in the firm's records, so I can't "
+    "answer it here. You're welcome to try a web search to look into it yourself."
+)
+
+
 def _ask_web_consent(chunks: List[Dict], best_distance: float) -> Dict:
     """
-    Standard "nothing found locally, want me to search the web?" response -
-    used everywhere local search (uploaded document and/or firm database)
-    comes up empty and the question doesn't already contain an explicit
-    web-search request, for both General Public and Lawyer roles. Reuses
-    _nearest_document_note's near-miss suggestions when there's something
-    worth mentioning; falls back to a plain prompt when there's nothing
-    local to reference at all (e.g. no documents exist yet).
+    Standard "nothing found locally" response - used everywhere local search
+    (uploaded document and/or firm database) comes up empty and the question
+    doesn't already contain an explicit web-search request, for both General
+    Public and Lawyer roles. Reuses _nearest_document_note's near-miss
+    suggestions when there's something worth mentioning; otherwise returns the
+    plain not-found message. Does not offer to search the web on the user's
+    behalf - see NOT_FOUND_LOCALLY_MESSAGE.
     """
     note = _nearest_document_note(chunks, best_distance)
     if not note:
-        note = (
-            "I couldn't find relevant information locally. Would you like me "
-            "to search the web for public legal sources?"
-        )
+        note = NOT_FOUND_LOCALLY_MESSAGE
     return {
         "answer": note,
         "sources": [],
-        "needs_web_confirmation": True,
+        "needs_web_confirmation": False,
         "route": None,
         "confidence_level": None,
     }
@@ -492,16 +500,16 @@ def _nearest_document_note(chunks: List[Dict], best_distance: float) -> str:
         return (
             f"I couldn't find a direct answer in your firm's documents, but there is "
             f'a similar case on file: "{names[0]}". Ask me to explain that case if '
-            f"you'd like, or confirm below if you'd like me to search the web for "
-            f"general guidance instead."
+            f"you'd like, or you're welcome to try a web search yourself for general "
+            f"guidance."
         )
 
     quoted = ", ".join(f'"{name}"' for name in names)
     return (
         f"I couldn't find a direct answer in your firm's documents, but there are "
         f"{len(names)} similar cases on file: {quoted}. Ask me to explain any of them "
-        f"if you'd like, or confirm below if you'd like me to search the web for "
-        f"general guidance instead."
+        f"if you'd like, or you're welcome to try a web search yourself for general "
+        f"guidance."
     )
 
 

@@ -216,6 +216,166 @@ def classify_meta_question(question: str) -> Optional[dict]:
     return data
 
 
+# ---------------------------------------------------------------------------
+# Unified semantic intent router
+# ---------------------------------------------------------------------------
+#
+# This is the primary, semantic-first routing decision for an incoming
+# message - it understands the user's underlying INTENT rather than matching
+# keywords, so paraphrases, typos, reordered words and other languages all
+# route the same way. It supersedes the old "regex first, LLM only as
+# fallback" ordering: the regex patterns in firm_stats.py are now used ONLY
+# as a resilience fallback when this LLM call itself fails, never to override
+# a semantic decision.
+#
+# It returns exactly one of these intents:
+#   - "firm_data": an aggregate question about the firm's OWN operational
+#     records (counts / lists / breakdowns of cases, documents, lawyers,
+#     drafts, contacts, reminders, drive) -> answered deterministically from
+#     the database (see firm_stats), so numbers are never hallucinated.
+#   - "clarify": the message is genuinely ambiguous between two or more
+#     clearly different actions and answering either way risks doing the
+#     wrong thing -> ask the user a short clarifying question instead of
+#     guessing. Chosen ONLY when truly ambiguous.
+#   - "other": everything else (a specific case/document question, a request
+#     to draft or review a document, a legal/content question, a follow-up)
+#     -> handed to the already-semantic tool-calling agent, which decides
+#     which tool to use.
+
+_INTENT_ROUTER_PROMPT = f"""
+You are the intent router for a law firm's internal AI assistant. Read the
+user's latest message (using the conversation history only to resolve what
+a follow-up refers to) and decide the user's UNDERLYING INTENT. Classify by
+MEANING, never by exact wording - synonyms, reordered words, singular/
+plural, typos, terse or wordy phrasing, and any language all map to the same
+intent.
+
+Choose exactly one "intent":
+
+1. "firm_data" - the user is asking about the firm's OWN operational records
+   IN AGGREGATE: a COUNT, a LIST, or a BREAKDOWN across the whole collection
+   of cases / documents / lawyers / drafts / contacts (= clients) / reminders,
+   or the Google Drive sync status. Examples: "how many cases do we have",
+   "list my open cases", "who is on my team", "any overdue reminders",
+   "break down cases by lawyer", "what's synced from drive", "cases assigned
+   to Priya".
+   NOT firm_data (use "other" instead):
+   - A question about ONE specific, already-identified record - by name/
+     title/ID ("status of the Gupta case", "tell me about case 83") or
+     deictically ("this case", "it", "that matter") or by topic/subject
+     ("the theft case", "the property dispute") - describing/explaining/
+     summarizing ONE record is "other", not firm_data.
+   - "draft" as a VERB ("draft a notice", "prepare an agreement") - that is
+     an action request -> "other". "draft" as a NOUN ("list my drafts") is
+     firm_data.
+   - A bare personal name with no firm reference ("who is Virat Kohli") ->
+     "other" (the agent will handle scope).
+
+2. "clarify" - ONLY when the message is genuinely ambiguous between two or
+   more clearly DIFFERENT actions, and picking one could do the wrong thing.
+   Return a short, specific "clarification_question". Be conservative: if the
+   intent is reasonably clear, or context (an attached document / an active
+   case) already disambiguates it, do NOT choose clarify - choose the most
+   likely intent instead. Repeatedly asking obvious questions is worse than
+   proceeding. Genuine examples: "the agreement" as a whole message (draft a
+   new one, or review an existing one?); "handle the Sharma matter" (open it,
+   summarize it, draft something for it, or set a reminder?). NOT ambiguous:
+   "summarize this" with a document attached; "how many cases" (clearly
+   firm_data); "what is section 302 IPC" (clearly a legal question -> other).
+
+3. "other" - everything else: a specific case/document question, a request to
+   draft or review/redline a document, a substantive legal question, a
+   general question, or a normal follow-up. When unsure between firm_data and
+   other for a "...case" message, prefer "other" (describing one case is the
+   safe default).
+
+Context you are given:
+- has_document: whether the user has attached a specific document to this chat.
+- has_case: whether the conversation is already focused on one specific case.
+When has_document or has_case is true, most references resolve to that
+document/case - lean AWAY from "clarify" and AWAY from "firm_data".
+
+Respond with ONLY a JSON object, no other text:
+{{
+  "intent": "firm_data" or "clarify" or "other",
+  "clarification_question": "" (a short question ONLY when intent is "clarify", else ""),
+  "entity": one of {_META_ENTITIES} (only when intent is "firm_data", else "none"),
+  "aggregation": "count" or "list" or "breakdown" (only when firm_data),
+  "case_type": one of {_META_CASE_TYPES} or null (only when firm_data + entity "cases" and a type was named),
+  "case_status": one of {_META_CASE_STATUSES} or null (only when firm_data + entity "cases" and a status was named or implied - "active/ongoing/pending/in progress/still open" = "open"; "disposed/finished/resolved/archived/completed" = "closed"),
+  "reminder_filter": "open" or "overdue" or null (only when firm_data + entity "reminders"),
+  "group_by": "category" or "lawyer" or "status" or "client" or null (only when firm_data + aggregation "breakdown"),
+  "lawyer_name": "" (the person's name ONLY for a "cases assigned to <name>" firm_data question, else "")
+}}
+"""
+
+
+def classify_intent(
+    question: str,
+    history: Optional[list] = None,
+    has_document: bool = False,
+    has_case: bool = False,
+) -> dict:
+    """
+    Primary semantic intent router - see _INTENT_ROUTER_PROMPT above.
+
+    Returns a dict whose "intent" is one of "firm_data" | "clarify" | "other",
+    plus the firm-data slots when intent is "firm_data" and a
+    "clarification_question" when intent is "clarify". On ANY LLM/parsing
+    failure returns {"intent": "error"} so callers can fall back to the
+    deterministic regex path instead of silently mis-routing - "error" is
+    deliberately distinct from "other" (a confident not-firm-data decision).
+    """
+
+    history_text = ""
+    if history:
+        recent = history[-6:]
+        history_text = "\n".join(
+            f"User: {turn.get('question', '')}\nAssistant: {turn.get('answer', '')}"
+            for turn in recent
+        )
+
+    user_content = (
+        f"has_document: {str(has_document).lower()}\n"
+        f"has_case: {str(has_case).lower()}\n"
+        + (f"\nConversation so far:\n{history_text}\n" if history_text else "")
+        + f"\nLatest message: {question}"
+    )
+
+    try:
+        client = get_groq_client()
+        response = client.chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": _INTENT_ROUTER_PROMPT.strip()},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0,
+            max_tokens=200,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content)
+    except Exception:
+        return {"intent": "error"}
+
+    if not isinstance(data, dict) or data.get("intent") not in ("firm_data", "clarify", "other"):
+        return {"intent": "error"}
+
+    # A firm_data verdict must name a real entity, otherwise it's unusable -
+    # treat it as "other" so the agent handles it rather than dispatching a
+    # firm-stats query with no entity.
+    if data.get("intent") == "firm_data" and (
+        data.get("entity") not in _META_ENTITIES or data.get("entity") == "none"
+    ):
+        data["intent"] = "other"
+
+    # A clarify verdict with no actual question is useless - fall through.
+    if data.get("intent") == "clarify" and not str(data.get("clarification_question", "")).strip():
+        data["intent"] = "other"
+
+    return data
+
+
 _WEB_INTENT_CLASSIFIER_PROMPT = """
 You classify whether a user's message is asking the assistant to search the
 web / internet / online sources for information, as opposed to a normal

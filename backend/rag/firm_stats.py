@@ -746,59 +746,81 @@ def _detect_case_filters_from_text(question: str):
     return case_type, case_status
 
 
-def try_answer_firm_stats(question: str, firm):
+def _answer_cases_assigned_to(lawyer_name: str, firm):
+    """Answer a "cases assigned to <name>" firm-data question."""
+    titles, ambiguous_names = _case_titles_by_lawyer_name(firm, lawyer_name)
+    resolved_case_id = None
+    if ambiguous_names:
+        answer = (
+            f"More than one lawyer on your team matches \"{lawyer_name}\": "
+            f"{', '.join(ambiguous_names)}. Could you specify which one?"
+        )
+    elif titles is None:
+        answer = f"I couldn't find a lawyer matching \"{lawyer_name}\" on your team."
+    else:
+        answer = _list_preview(titles, f"case assigned to {lawyer_name}")
+        if len(titles) == 1:
+            from cases.models import Case
+            resolved_case_id = (
+                Case.objects.filter(firm=firm, title=titles[0])
+                .values_list("id", flat=True)
+                .first()
+            )
+    return answer, resolved_case_id, True
+
+
+def _answer_firm_stats_from_classification(classification: dict, stripped: str, firm):
     """
-    Answers operational questions about the firm's own data (case/document
-    /lawyer/draft/contact/reminder/drive counts, listings, and breakdowns)
-    straight from the database - never hallucinated. Two layers:
-
-    1. A fast regex pre-filter for the most common English phrasings -
-       cheap, no LLM round-trip. Patterns are grouped by entity (cases,
-       documents, reminders, ...) and only the single most specific match
-       within each group fires, so a question can combine answers across
-       DIFFERENT entities ("how many cases and documents") without two
-       patterns for the SAME entity ever both firing and contradicting
-       each other.
-    2. An LLM intent classifier as the general fallback, so any phrasing,
-       new aggregation, or language asking about the firm's own data is
-       still caught, not just the ones anticipated by the patterns above.
-
-    Returns (None, None) if the question isn't a meta question at all, so
-    the caller falls through to document/web search. Otherwise returns
-    (answer_text, resolved_case_id) - resolved_case_id is set only when
-    this was a cases-related question that narrowed down to EXACTLY one
-    case (see _resolve_single_case_id), so the caller can remember "the
-    case we just discussed" for follow-up questions - the "single result
-    rule".
+    Produce a firm-data answer from a semantic classify_intent result
+    (intent == "firm_data"). The numbers/names always come straight from the
+    database - the classification only decided WHICH query to run.
     """
-    stripped = question.strip()
+    entity = classification.get("entity")
+    lawyer_name = str(classification.get("lawyer_name", "") or "").strip()
 
+    # "cases assigned to <name>" - the classifier carries the name directly;
+    # fall back to the regex extractor if it named the intent but not a name.
+    if entity == "cases" and not lawyer_name:
+        assigned_match = _ASSIGNED_TO_LAWYER_RE.search(stripped)
+        if assigned_match:
+            lawyer_name = assigned_match.group(1).strip()
+    if entity == "cases" and lawyer_name:
+        return _answer_cases_assigned_to(lawyer_name, firm)
+
+    answer = _dispatch_meta_question(classification, firm)
+    if answer is None:
+        return None, None, False
+
+    is_cases_query = entity == "cases"
+    resolved_case_id = None
+    if is_cases_query:
+        raw_type = classification.get("case_type")
+        raw_status = classification.get("case_status")
+        valid_type = raw_type if raw_type in ("civil", "criminal", "corporate", "family", "property") else None
+        valid_status = raw_status if raw_status in ("open", "closed", "in_progress", "on_hold") else None
+        resolved_case_id = _resolve_single_case_id(firm, valid_type, valid_status)
+
+    return answer, resolved_case_id, is_cases_query
+
+
+def _answer_firm_stats_via_regex(stripped: str, firm):
+    """
+    Resilience fallback used ONLY when the semantic intent router is
+    unavailable (LLM/parse error). Pure regex, no further LLM round-trip -
+    a classifier outage should degrade to the old fast-path behaviour, not
+    drop firm-stats answers entirely. Returns (None, None, False) when no
+    pattern matches (i.e. treat as not-a-firm-data question).
+    """
     answers = []
     matched_groups = set()
-
     resolved_case_id = None
 
-    # "cases assigned to <name>" needs the matched name text itself, which
-    # the (group, pattern, handler(firm)) shape above can't carry through -
-    # handled here as its own pre-check instead of forcing every handler in
-    # STATS_PATTERNS to accept a match object it doesn't need.
     assigned_match = _ASSIGNED_TO_LAWYER_RE.search(stripped)
     if assigned_match:
-        lawyer_name = assigned_match.group(1).strip()
-        titles, ambiguous_names = _case_titles_by_lawyer_name(firm, lawyer_name)
-        if ambiguous_names:
-            answers.append(
-                f"More than one lawyer on your team matches \"{lawyer_name}\": "
-                f"{', '.join(ambiguous_names)}. Could you specify which one?"
-            )
-        elif titles is None:
-            answers.append(f"I couldn't find a lawyer matching \"{lawyer_name}\" on your team.")
-        else:
-            answers.append(_list_preview(titles, f"case assigned to {lawyer_name}"))
-            if len(titles) == 1:
-                from cases.models import Case
-                matched_case = Case.objects.filter(firm=firm, title=titles[0]).values_list("id", flat=True).first()
-                resolved_case_id = matched_case
+        answer, resolved_case_id, _ = _answer_cases_assigned_to(
+            assigned_match.group(1).strip(), firm
+        )
+        answers.append(answer)
         matched_groups.add("cases")
 
     for group, pattern, handler in STATS_PATTERNS:
@@ -808,27 +830,56 @@ def try_answer_firm_stats(question: str, firm):
             answers.append(handler(firm))
             matched_groups.add(group)
 
-    if answers:
-        is_cases_query = "cases" in matched_groups
-        if is_cases_query and resolved_case_id is None:
-            case_type, case_status = _detect_case_filters_from_text(stripped)
-            resolved_case_id = _resolve_single_case_id(firm, case_type, case_status)
-        return " ".join(answers), resolved_case_id, is_cases_query
-
-    from .groq_client import classify_meta_question
-
-    classification = classify_meta_question(stripped)
-    if classification is None:
+    if not answers:
         return None, None, False
 
-    answer = _dispatch_meta_question(classification, firm)
-    is_cases_query = classification.get("entity") == "cases"
+    is_cases_query = "cases" in matched_groups
+    if is_cases_query and resolved_case_id is None:
+        case_type, case_status = _detect_case_filters_from_text(stripped)
+        resolved_case_id = _resolve_single_case_id(firm, case_type, case_status)
+    return " ".join(answers), resolved_case_id, is_cases_query
 
-    if answer is not None and is_cases_query:
-        raw_type = classification.get("case_type")
-        raw_status = classification.get("case_status")
-        valid_type = raw_type if raw_type in ("civil", "criminal", "corporate", "family", "property") else None
-        valid_status = raw_status if raw_status in ("open", "closed", "in_progress", "on_hold") else None
-        resolved_case_id = _resolve_single_case_id(firm, valid_type, valid_status)
 
-    return answer, resolved_case_id, is_cases_query
+def try_answer_firm_stats(question: str, firm, classification: Optional[dict] = None):
+    """
+    Answers aggregate operational questions about the firm's own data
+    (case/document/lawyer/draft/contact/reminder/drive counts, listings, and
+    breakdowns) straight from the database - never hallucinated.
+
+    Semantic-first: the primary decision is the LLM intent router
+    (groq_client.classify_intent), which understands the user's MEANING
+    rather than matching keywords, so paraphrases/typos/other languages route
+    correctly. The regex patterns (_answer_firm_stats_via_regex) are used ONLY
+    as a resilience fallback when the router call itself errors - never to
+    override a semantic decision, which is what used to cause keyword
+    mis-fires.
+
+    ``classification`` may be passed in by a caller that already ran
+    classify_intent (e.g. the view, which also needs the clarify verdict), so
+    the router isn't called twice for one message. When omitted it's computed
+    here.
+
+    Returns (None, None, False) when the message isn't an aggregate firm-data
+    question, so the caller falls through to the agent / document search.
+    Otherwise returns (answer_text, resolved_case_id, is_cases_query) -
+    resolved_case_id is set only when a cases question narrowed down to
+    EXACTLY one case (the "single result rule"), so the caller can remember
+    "the case we just discussed" for follow-ups.
+    """
+    stripped = question.strip()
+
+    if classification is None:
+        from .groq_client import classify_intent
+        classification = classify_intent(stripped)
+
+    intent = classification.get("intent")
+
+    if intent == "firm_data":
+        return _answer_firm_stats_from_classification(classification, stripped, firm)
+
+    if intent == "error":
+        # Router unavailable - degrade to the regex fast-path.
+        return _answer_firm_stats_via_regex(stripped, firm)
+
+    # "other" / "clarify" - a confident not-an-aggregate-firm-data verdict.
+    return None, None, False
