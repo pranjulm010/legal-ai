@@ -15,6 +15,12 @@ MAX_DOCUMENT_CHARS_FOR_REDLINE = 12000
 # to the LLM so it can infer the full structure, not a chunked subset.
 MAX_DOCUMENT_CHARS_FOR_TEMPLATE = 12000
 
+# When drafting FROM a saved template, the original sample document is sent
+# back to the model as a verbatim format exemplar to mirror exactly. Capped a
+# bit tighter than analysis, since the drafting call also carries the system
+# prompt, the user's instruction and the placeholder list.
+MAX_SAMPLE_CHARS_FOR_DRAFT = 8000
+
 
 def analyze_template(document_text: str) -> Dict:
     """
@@ -125,16 +131,40 @@ def _build_template_guidance(template: Optional[Dict], values: Optional[Dict]) -
     if not template:
         return ""
 
-    parts = ["You MUST follow this saved template exactly - match its structure, tone and formatting."]
+    parts = []
 
-    if template.get("extracted_structure"):
-        parts.append(f"\nDocument structure to follow:\n{template['extracted_structure']}")
-    if template.get("tone"):
-        parts.append(f"\nTone:\n{template['tone']}")
-    if template.get("formatting_rules"):
-        parts.append(f"\nFormatting rules:\n{template['formatting_rules']}")
-    if template.get("ai_prompt"):
-        parts.append(f"\nFormat instruction:\n{template['ai_prompt']}")
+    # The single strongest signal for matching a template is the original
+    # sample document itself - reproduce ITS exact layout, not a paraphrased
+    # description of it. Without this the model tends to drift to its own
+    # default section-heading style (e.g. turning a TO/FROM/"Dear Sir" letter
+    # into a "# INTRODUCTION / # NOTICE BODY" memo). The distilled facets
+    # below are kept only as a fallback for older templates saved before the
+    # sample text was retained.
+    sample_text = (template.get("sample_text") or "").strip()
+    if sample_text:
+        parts.append(
+            "Reproduce the SAMPLE DOCUMENT below EXACTLY as your format: keep "
+            "the same section order, the same headings and heading style, the "
+            "same salutation and closing, the same signature/footer block, the "
+            "same numbering, and the same fixed/boilerplate wording. Do NOT "
+            "restructure it, rename or reorder its sections, add sections it "
+            "does not have, or switch it to a different document style. Change "
+            "ONLY the variable values (listed after the sample); leave every "
+            "other line as-is.\n\n"
+            "----- SAMPLE DOCUMENT (mirror this format exactly) -----\n"
+            f"{sample_text[:MAX_SAMPLE_CHARS_FOR_DRAFT]}\n"
+            "----- END SAMPLE DOCUMENT -----"
+        )
+    else:
+        parts.append("You MUST follow this saved template exactly - match its structure, tone and formatting.")
+        if template.get("extracted_structure"):
+            parts.append(f"\nDocument structure to follow:\n{template['extracted_structure']}")
+        if template.get("tone"):
+            parts.append(f"\nTone:\n{template['tone']}")
+        if template.get("formatting_rules"):
+            parts.append(f"\nFormatting rules:\n{template['formatting_rules']}")
+        if template.get("ai_prompt"):
+            parts.append(f"\nFormat instruction:\n{template['ai_prompt']}")
 
     values = values or {}
     filled = {k: v for k, v in values.items() if str(v).strip()}
@@ -147,18 +177,22 @@ def _build_template_guidance(template: Optional[Dict], values: Optional[Dict]) -
             if not name:
                 continue
             given = filled.get(name)
+            desc = item.get("description", "")
+            label = f"{name} ({desc})" if desc else name
             if given:
-                lines.append(f"- {name}: {given}")
+                lines.append(f"- {label}: {given}")
             else:
                 # Left blank on purpose - keep it as a bracketed placeholder.
-                lines.append(f"- {name}: [{name}] (not provided - keep as a bracketed placeholder)")
+                lines.append(f"- {label}: [{name}] (not provided - keep as a bracketed placeholder)")
         if lines:
             parts.append(
-                "\nPlaceholder values to substitute into the document. "
-                "Where a value is given, write the value directly in the text and "
-                "do NOT also print the placeholder token. Where a value is not "
-                "given, keep the bracketed token so a human can fill it in later:\n"
-                + "\n".join(lines)
+                "\nPlaceholder values to substitute into the document. In the "
+                "sample these appear as bracketed tokens (e.g. [Recipient Name]) "
+                "or as descriptive fields - match each value below to the right "
+                "spot by MEANING. Where a value is given, write it directly in "
+                "the text and do NOT also print the placeholder token. Where a "
+                "value is not given, keep a bracketed token so a human can fill "
+                "it in later:\n" + "\n".join(lines)
             )
 
     return "\n".join(parts)
@@ -188,7 +222,13 @@ Rules:
 2. Use standard Indian legal drafting conventions and formatting.
 3. Do not invent specific facts (names, dates, amounts) beyond what the user provided - use clearly marked placeholders like [PARTY NAME] or [DATE] where information is missing.
 4. Keep the draft structured with clear headings/clauses where appropriate.
-5. End with:
+5. Output PLAIN TEXT only - do NOT use Markdown syntax. No '#'/'##' heading
+   markers, no '*' or '**' for bold or bullets, no backticks, no Markdown
+   tables. Write a heading as a plain line (e.g. an UPPERCASE or Title Case
+   line) exactly as a real legal document would, because this text is
+   exported straight to PDF/DOCX and Markdown symbols would show up as
+   literal characters.
+6. End with:
    "Disclaimer: This is an AI-generated draft for informational purposes only and must be reviewed by a qualified lawyer before use."
 """
 

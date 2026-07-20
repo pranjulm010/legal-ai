@@ -387,6 +387,7 @@ def generate_draft_endpoint(request, payload: GenerateDraftSchema):
             return 400, {"error": "Template not found for this firm."}
 
         template_dict = {
+            "sample_text": template.sample_text,
             "extracted_structure": template.extracted_structure,
             "tone": template.tone,
             "formatting_rules": template.formatting_rules,

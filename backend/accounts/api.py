@@ -20,7 +20,7 @@ from .audit import log_audit_event
 from .auth import JWTAuth
 from .emails import build_invite_link, send_lawyer_invite_email
 from .models import Firm, LawyerProfile
-from .permissions import require_permission
+from .permissions import has_permission, require_permission
 from .rate_limit import client_ip, rate_limit_exceeded
 from cases.sample_data import seed_sample_documents
 
@@ -554,7 +554,10 @@ class LawyerImportResultSchema(Schema):
     errors: List[str]
 
 
-def _serialize_lawyer(profile: LawyerProfile) -> dict:
+def _serialize_lawyer(profile: LawyerProfile, include_last_login: bool = True) -> dict:
+    # last_login is a colleague's activity detail - only firm admins (the
+    # "manage_team" capability) should see it, so it's omitted for everyone
+    # else rather than leaked to the whole team via the list endpoint.
     return {
         "id": profile.id,
         "username": profile.user.username,
@@ -564,7 +567,7 @@ def _serialize_lawyer(profile: LawyerProfile) -> dict:
         "department": profile.department,
         "is_active": profile.user.is_active,
         "invite_pending": not profile.user.has_usable_password(),
-        "last_login": profile.user.last_login,
+        "last_login": profile.user.last_login if include_last_login else None,
     }
 
 
@@ -574,8 +577,12 @@ def _require_admin(request):
 
 @lawyer_router.get("/", response={200: List[LawyerListItemSchema]})
 def list_lawyers(request):
+    can_see_last_login = has_permission(request.auth.role, "manage_team")
     profiles = LawyerProfile.objects.filter(firm=request.auth.firm).select_related("user")
-    return [_serialize_lawyer(profile) for profile in profiles.order_by("user__username")]
+    return [
+        _serialize_lawyer(profile, include_last_login=can_see_last_login)
+        for profile in profiles.order_by("user__username")
+    ]
 
 
 @lawyer_router.post("/", response={201: LawyerCreateResponseSchema, 400: ErrorSchema, 403: ErrorSchema})
