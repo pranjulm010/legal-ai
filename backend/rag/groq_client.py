@@ -37,10 +37,21 @@ PARTY or the ACCUSED/OTHER PARTY, and frame the advice accordingly:
 
 
 def get_groq_client():
-    if not settings.GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY is missing in .env file.")
+    """
+    The single integration point for AI Provider Mode (Settings > AI
+    Configuration): delegates to ai_provider.resolver, which returns the
+    platform's own Groq client (today's exact behavior, unchanged) unless
+    the current request's workspace is in Customer Managed mode, in which
+    case it returns a same-shaped client wrapping the workspace's own
+    connected provider instead. Every caller of get_groq_client() across
+    rag/*.py - research_agent.py, drafting.py, firm_stats.py,
+    document_intelligence.py, rag_pipeline.py, agent_tools.py,
+    document_processor.py - is completely unchanged; none of them know or
+    need to know this resolution happens.
+    """
+    from ai_provider.resolver import get_resolved_ai_client
 
-    return Groq(api_key=settings.GROQ_API_KEY)
+    return get_resolved_ai_client()
 
 
 _META_ENTITIES = ["cases", "documents", "lawyers", "drafts", "contacts", "reminders", "drive", "none"]

@@ -1140,4 +1140,78 @@ export const compareDocuments = async (
   return response.data.comparison;
 };
 
+// --- Settings > AI Configuration / API Integrations -----------------------
+
+export type AIProviderMode = "PLATFORM" | "CUSTOMER";
+
+export interface AIProviderModeStatus {
+  provider_mode: AIProviderMode;
+  has_connected_credential: boolean;
+}
+
+export type AIProviderId = "openai" | "anthropic" | "gemini" | "groq" | "azure_openai" | "mistral";
+
+export interface APIIntegration {
+  provider: AIProviderId;
+  configured: boolean;
+  enabled: boolean;
+  status: "untested" | "connected" | "failed";
+  last_tested_at: string | null;
+  last_test_message: string;
+  key_hint: string;
+  base_url: string;
+  model: string;
+}
+
+export const getAiProviderMode = async (): Promise<AIProviderModeStatus> => {
+  const response = await api.get("/settings/ai-provider");
+  return response.data;
+};
+
+export const updateAiProviderMode = async (
+  providerMode: AIProviderMode
+): Promise<AIProviderModeStatus> => {
+  const response = await api.put("/settings/ai-provider", { provider_mode: providerMode });
+  return response.data;
+};
+
+export const listApiIntegrations = async (): Promise<APIIntegration[]> => {
+  const response = await api.get("/settings/api-integrations");
+  return response.data;
+};
+
+export const saveApiIntegration = async (payload: {
+  provider: AIProviderId;
+  api_key: string;
+  base_url?: string;
+  model?: string;
+  extra_config?: Record<string, unknown>;
+}): Promise<APIIntegration> => {
+  const response = await api.post("/settings/api-integrations", payload);
+  return response.data;
+};
+
+export const updateApiIntegration = async (
+  provider: AIProviderId,
+  payload: {
+    api_key?: string;
+    base_url?: string;
+    model?: string;
+    extra_config?: Record<string, unknown>;
+    enabled?: boolean;
+  }
+): Promise<APIIntegration> => {
+  const response = await api.put(`/settings/api-integrations/${provider}`, payload);
+  return response.data;
+};
+
+export const deleteApiIntegration = async (provider: AIProviderId): Promise<void> => {
+  await api.delete(`/settings/api-integrations/${provider}`);
+};
+
+export const testApiIntegration = async (provider: AIProviderId): Promise<APIIntegration> => {
+  const response = await api.post("/settings/api-integrations/test", { provider });
+  return response.data;
+};
+
 export default api;

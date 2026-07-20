@@ -15,7 +15,7 @@ import {
 
 const ROLES = ["admin", "partner", "associate", "paralegal"];
 
-export default function TeamPage() {
+export default function TeamManagementPanel() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
@@ -49,10 +49,6 @@ export default function TeamPage() {
   useEffect(() => {
     load();
 
-    // Invite completion (a lawyer setting their password) happens in a
-    // different browser session, so this page's data goes stale the moment
-    // that happens. Refetch whenever the admin comes back to this tab/page
-    // instead of relying on a full reload.
     const handleFocus = () => load();
     const handleVisibility = () => {
       if (document.visibilityState === "visible") load();
@@ -177,10 +173,15 @@ export default function TeamPage() {
     }
   };
 
+  const visibleLawyers = lawyers.filter((lawyer) => lawyer.role !== "admin");
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-[#f0e6cc]">Team</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-[#f0e6cc]">Team Management</h1>
+          <p className="text-sm text-[#8a7c68]">Lawyers, roles, invitations, and CSV import.</p>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={load}
@@ -191,29 +192,29 @@ export default function TeamPage() {
           </button>
           {isAdmin && (
             <>
-            <input
-              ref={csvInputRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) handleImportCsv(file);
-              }}
-            />
-            <button
-              onClick={() => csvInputRef.current?.click()}
-              disabled={importing}
-              className="rounded-lg border border-[#c9a96e]/15 px-4 py-2 text-sm text-[#c9a96e] disabled:opacity-50"
-            >
-              {importing ? "Importing..." : "Import CSV"}
-            </button>
-            <button
-              onClick={() => setShowForm((prev) => !prev)}
-              className="rounded-lg bg-[#c9a96e] px-4 py-2 text-sm font-semibold text-[#1a0e00]"
-            >
-              {showForm ? "Cancel" : "+ Add lawyer"}
-            </button>
+              <input
+                ref={csvInputRef}
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) handleImportCsv(file);
+                }}
+              />
+              <button
+                onClick={() => csvInputRef.current?.click()}
+                disabled={importing}
+                className="rounded-lg border border-[#c9a96e]/15 px-4 py-2 text-sm text-[#c9a96e] disabled:opacity-50"
+              >
+                {importing ? "Importing..." : "Import CSV"}
+              </button>
+              <button
+                onClick={() => setShowForm((prev) => !prev)}
+                className="rounded-lg bg-[#c9a96e] px-4 py-2 text-sm font-semibold text-[#1a0e00]"
+              >
+                {showForm ? "Cancel" : "+ Add lawyer"}
+              </button>
             </>
           )}
         </div>
@@ -330,9 +331,7 @@ export default function TeamPage() {
             {submitting ? "Creating..." : "Create"}
           </button>
 
-          {formError && (
-            <p className="w-full text-sm text-red-300">{formError}</p>
-          )}
+          {formError && <p className="w-full text-sm text-red-300">{formError}</p>}
         </form>
       )}
 
@@ -340,13 +339,13 @@ export default function TeamPage() {
 
       {loading ? (
         <p className="text-[#8a7c68]">Loading team...</p>
-      ) : lawyers.filter((lawyer) => lawyer.role !== "admin").length === 0 ? (
+      ) : visibleLawyers.length === 0 ? (
         <p className="text-[#8a7c68]">No team members yet. Add a lawyer to get started.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {/* Admins are the firm's owners/managers, not "team members" to
               manage here - exclude them from this list. */}
-          {lawyers.filter((lawyer) => lawyer.role !== "admin").map((lawyer) => (
+          {visibleLawyers.map((lawyer) => (
             <li
               key={lawyer.id}
               className="flex items-center justify-between rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] px-4 py-3"
