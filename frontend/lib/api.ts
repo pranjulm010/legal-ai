@@ -621,6 +621,7 @@ export interface LawyerListItem {
   department: string;
   is_active: boolean;
   invite_pending: boolean;
+  last_login: string | null;
 }
 
 export interface LawyerInviteResult extends LawyerListItem {

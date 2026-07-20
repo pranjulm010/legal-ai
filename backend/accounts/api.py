@@ -8,6 +8,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.utils import timezone
 from django.utils.http import urlsafe_base64_decode
 from django.utils.text import slugify
 from ninja import File, Router, Schema
@@ -68,6 +69,19 @@ class ErrorSchema(Schema):
     error: str
 
 
+def _record_login(profile) -> None:
+    """
+    Record a successful login so an admin can see when each team member last
+    signed in (Team page) and the full sign-in history (Admin Dashboard audit
+    feed). This JWT flow uses authenticate() directly, which - unlike Django's
+    session login() - does NOT update User.last_login, so we set it ourselves.
+    """
+    user = profile.user
+    user.last_login = timezone.now()
+    user.save(update_fields=["last_login"])
+    log_audit_event(profile.firm, profile, "logged_in")
+
+
 @router.post("/login/", response={200: TokenResponseSchema, 401: ErrorSchema, 429: ErrorSchema})
 def login(request, payload: LoginSchema):
     rate_key = f"login:{client_ip(request)}:{payload.username}"
@@ -98,6 +112,8 @@ def login(request, payload: LoginSchema):
 
     if not profile.firm.is_active:
         return 401, {"error": "This firm's account has been suspended. Contact support."}
+
+    _record_login(profile)
 
     refresh = RefreshToken.for_user(user)
 
@@ -343,6 +359,8 @@ def set_password(request, payload: SetPasswordSchema):
     user.set_password(payload.password)
     user.save()
 
+    _record_login(profile)
+
     refresh = RefreshToken.for_user(user)
 
     return 200, {
@@ -506,6 +524,7 @@ class LawyerListItemSchema(Schema):
     department: str
     is_active: bool
     invite_pending: bool
+    last_login: Optional[datetime] = None
 
 
 class LawyerCreateResponseSchema(LawyerListItemSchema):
@@ -545,6 +564,7 @@ def _serialize_lawyer(profile: LawyerProfile) -> dict:
         "department": profile.department,
         "is_active": profile.user.is_active,
         "invite_pending": not profile.user.has_usable_password(),
+        "last_login": profile.user.last_login,
     }
 
 

@@ -415,7 +415,7 @@ def google_drive_oauth_callback(request):
 
     error = request.GET.get("error")
     if error:
-        return HttpResponseRedirect(f"{settings.FRONTEND_URL}/team?drive_error={error}")
+        return HttpResponseRedirect(f"{settings.FRONTEND_URL}/settings?drive_error={error}")
 
     code = request.GET.get("code")
     state = request.GET.get("state")
@@ -451,4 +451,4 @@ def google_drive_oauth_callback(request):
 
     log_audit_event(firm, lawyer, "drive_connected", "")
 
-    return HttpResponseRedirect(f"{settings.FRONTEND_URL}/team?drive_connected=1")
+    return HttpResponseRedirect(f"{settings.FRONTEND_URL}/settings?drive_connected=1")
