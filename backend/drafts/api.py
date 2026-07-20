@@ -11,6 +11,7 @@ from api.models import UploadedDocument
 from cases.models import Case, CaseActivity
 from rag.document_processor import extract_text_from_document
 from rag.drafting import generate_draft, generate_redline_suggestions
+from rag.llm_errors import AIProviderNotConfigured
 from .export import build_docx_bytes, build_pdf_bytes
 from .models import Draft, RedlineSuggestion
 
@@ -155,7 +156,10 @@ def generate_draft_endpoint(request, payload: GenerateDraftSchema):
             return 400, {"error": "Case not found for this firm."}
 
     context = case.description if case else ""
-    content = generate_draft(prompt=payload.prompt, context=context)
+    try:
+        content = generate_draft(prompt=payload.prompt, context=context, firm=request.auth.firm)
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error)}
 
     draft = Draft.objects.create(
         firm=request.auth.firm,
@@ -207,14 +211,19 @@ def generate_redline_endpoint(request, payload: GenerateRedlineSchema):
         document_text = extract_text_from_document(
             file_path=document.file.path,
             document_type=document.document_type,
+            firm=request.auth.firm,
         )
     except (FileNotFoundError, ValueError) as error:
         return 400, {"error": f"Could not read document: {error}"}
 
-    suggestions = generate_redline_suggestions(
-        document_text=document_text,
-        instructions=payload.instructions,
-    )
+    try:
+        suggestions = generate_redline_suggestions(
+            document_text=document_text,
+            instructions=payload.instructions,
+            firm=request.auth.firm,
+        )
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error)}
 
     draft = Draft.objects.create(
         firm=request.auth.firm,

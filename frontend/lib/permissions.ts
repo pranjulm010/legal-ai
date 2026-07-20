@@ -35,7 +35,17 @@ export const ROLE_PERMISSIONS: Record<string, Set<string>> = {
   public: new Set(["delete_document", "delete_chat"]),
 };
 
-export function hasPermission(role: string | undefined, action: string): boolean {
+// `live`, when provided, is the effective action list fetched from
+// GET /auth/my-permissions/ (accounts for per-firm RBAC overrides on top of
+// the hardcoded defaults above). Pass it whenever it's available - the
+// hardcoded matrix here is only a fallback for the brief window before it
+// loads, since a firm can now grant/revoke actions per role at runtime.
+export function hasPermission(
+  role: string | undefined,
+  action: string,
+  live?: string[] | null
+): boolean {
+  if (live) return live.includes(action);
   if (!role) return false;
   return ROLE_PERMISSIONS[role]?.has(action) ?? false;
 }

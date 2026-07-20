@@ -1,9 +1,7 @@
 import json
 from typing import Dict, List
 
-from django.conf import settings
-
-from .groq_client import get_groq_client
+from .llm_client import get_ai_client
 
 # Full document text is sent directly to the LLM for redlining (not the
 # chunked/vector RAG pipeline) since a redline review needs the whole
@@ -12,12 +10,12 @@ from .groq_client import get_groq_client
 MAX_DOCUMENT_CHARS_FOR_REDLINE = 12000
 
 
-def generate_draft(prompt: str, context: str = "") -> str:
+def generate_draft(prompt: str, context: str = "", firm=None) -> str:
     """
     Generate a fresh draft document/clause from a lawyer's instruction.
     """
 
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = """
 You are an Indian legal AI drafting assistant.
@@ -42,7 +40,7 @@ Now produce the complete draft.
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
@@ -54,14 +52,14 @@ Now produce the complete draft.
     return response.choices[0].message.content
 
 
-def generate_redline_suggestions(document_text: str, instructions: str = "") -> List[Dict]:
+def generate_redline_suggestions(document_text: str, instructions: str = "", firm=None) -> List[Dict]:
     """
     Review a document and return structured redline suggestions.
     Never raises on malformed model output - returns an empty list instead,
     so a bad LLM response degrades gracefully rather than 500ing the request.
     """
 
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     truncated_text = document_text[:MAX_DOCUMENT_CHARS_FOR_REDLINE]
 
@@ -87,7 +85,7 @@ Document to review:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},

@@ -14,9 +14,9 @@ function formatDate(value: string) {
 }
 
 export default function DraftsPage() {
-  const { user } = useAuth();
-  const canGenerateDraft = hasPermission(user?.role, "generate_draft");
-  const canDeleteDraft = hasPermission(user?.role, "delete_draft");
+  const { user, permissions } = useAuth();
+  const canGenerateDraft = hasPermission(user?.role, "generate_draft", permissions);
+  const canDeleteDraft = hasPermission(user?.role, "delete_draft", permissions);
 
   const [drafts, setDrafts] = useState<DraftListItem[]>([]);
   const [loading, setLoading] = useState(true);

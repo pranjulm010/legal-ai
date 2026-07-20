@@ -1069,4 +1069,165 @@ export const compareDocuments = async (
   return response.data.comparison;
 };
 
+// ---------------------------------------------------------------------------
+// Settings: RBAC
+// ---------------------------------------------------------------------------
+
+export interface RbacEntry {
+  role: string;
+  action: string;
+  granted: boolean;
+  source: "default" | "override";
+}
+
+export interface RbacUpdateItem {
+  role: string;
+  action: string;
+  granted: boolean | null;
+}
+
+export const getRbacMatrix = async (): Promise<RbacEntry[]> => {
+  const response = await api.get("/auth/rbac/");
+  return response.data;
+};
+
+export const updateRbacMatrix = async (updates: RbacUpdateItem[]): Promise<RbacEntry[]> => {
+  const response = await api.patch("/auth/rbac/", { updates });
+  return response.data;
+};
+
+export const getMyPermissions = async (): Promise<string[]> => {
+  const response = await api.get("/auth/my-permissions/");
+  return response.data.actions;
+};
+
+// ---------------------------------------------------------------------------
+// Settings: Audit logs
+// ---------------------------------------------------------------------------
+
+export interface AuditLogItem {
+  id: number;
+  actor_name: string | null;
+  action: string;
+  details: string;
+  created_at: string;
+}
+
+export interface AuditLogPage {
+  items: AuditLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const listAuditLogs = async (params?: {
+  page?: number;
+  page_size?: number;
+  action?: string;
+  actor_id?: number;
+  date_from?: string;
+  date_to?: string;
+}): Promise<AuditLogPage> => {
+  const response = await api.get("/auth/audit-logs/", { params });
+  return response.data;
+};
+
+// ---------------------------------------------------------------------------
+// Settings: generic per-firm settings store (Appearance, Notifications,
+// and the mock-only category panels all share this).
+// ---------------------------------------------------------------------------
+
+export const getFirmSettings = async (): Promise<Record<string, any>> => {
+  const response = await api.get("/auth/firm-settings/");
+  return response.data.data;
+};
+
+export const updateFirmSettings = async (
+  namespace: string,
+  patch: Record<string, any>
+): Promise<Record<string, any>> => {
+  const response = await api.patch("/auth/firm-settings/", { namespace, patch });
+  return response.data.data;
+};
+
+// ---------------------------------------------------------------------------
+// Settings: AI Provider Mode (Platform Managed vs Customer Managed / BYOK)
+// ---------------------------------------------------------------------------
+
+export type AiProviderModeValue = "platform_managed" | "customer_managed";
+
+export interface AiProviderMode {
+  mode: AiProviderModeValue;
+  has_connected_credential: boolean;
+}
+
+export const getAiProviderMode = async (): Promise<AiProviderMode> => {
+  const response = await api.get("/auth/ai-provider-mode/");
+  return response.data;
+};
+
+export const updateAiProviderMode = async (mode: AiProviderModeValue): Promise<AiProviderMode> => {
+  const response = await api.patch("/auth/ai-provider-mode/", { mode });
+  return response.data;
+};
+
+export type AiProviderId = "openai" | "anthropic" | "google_gemini" | "azure_openai" | "groq" | "mistral";
+
+export interface AiProviderSummary {
+  provider: AiProviderId;
+  configured: boolean;
+  enabled: boolean;
+  status: "untested" | "connected" | "failed";
+  last_tested_at: string | null;
+  last_test_message: string;
+  key_hint: string;
+  base_url: string;
+  model: string;
+}
+
+export const listAiProviders = async (): Promise<AiProviderSummary[]> => {
+  const response = await api.get("/auth/ai-providers/");
+  return response.data;
+};
+
+export const saveAiProviderCredential = async (
+  provider: AiProviderId,
+  payload: { api_key: string; base_url?: string; model?: string; extra_config?: Record<string, any> }
+): Promise<AiProviderSummary> => {
+  const response = await api.put(`/auth/ai-providers/${provider}/`, payload);
+  return response.data;
+};
+
+export const testAiProviderConnection = async (provider: AiProviderId): Promise<AiProviderSummary> => {
+  const response = await api.post(`/auth/ai-providers/${provider}/test/`);
+  return response.data;
+};
+
+export const enableAiProvider = async (provider: AiProviderId): Promise<AiProviderSummary> => {
+  const response = await api.post(`/auth/ai-providers/${provider}/enable/`);
+  return response.data;
+};
+
+export const disableAiProvider = async (provider: AiProviderId): Promise<AiProviderSummary> => {
+  const response = await api.post(`/auth/ai-providers/${provider}/disable/`);
+  return response.data;
+};
+
+export const deleteAiProviderCredential = async (provider: AiProviderId): Promise<void> => {
+  await api.delete(`/auth/ai-providers/${provider}/`);
+};
+
+// ---------------------------------------------------------------------------
+// Settings: Danger Zone
+// ---------------------------------------------------------------------------
+
+export const deactivateAllLawyers = async (): Promise<{ deactivated_count: number }> => {
+  const response = await api.post("/auth/firm/deactivate-lawyers/");
+  return response.data;
+};
+
+export const deactivateFirm = async (confirmFirmName: string): Promise<void> => {
+  await api.post("/auth/firm/deactivate/", { confirm_firm_name: confirmFirmName });
+};
+
 export default api;

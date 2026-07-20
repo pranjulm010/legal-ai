@@ -166,6 +166,11 @@ CORS_ALLOW_ALL_ORIGINS = True
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+# Symmetric key (Fernet) used to encrypt customer-supplied BYOK AI provider
+# API keys at rest - see accounts/encryption.py. Generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+AI_CREDENTIAL_ENCRYPTION_KEY = os.getenv("AI_CREDENTIAL_ENCRYPTION_KEY")
+
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL",
     "sentence-transformers/all-MiniLM-L6-v2"

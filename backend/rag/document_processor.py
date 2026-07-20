@@ -30,6 +30,35 @@ def get_file_extension(file_path: str) -> str:
     return Path(file_path).suffix.lower().replace(".", "")
 
 
+_OCR_DEFAULTS = {"lang": "eng", "auto_ocr": True}
+
+
+def _resolve_ocr_settings(firm) -> dict:
+    """
+    Per-firm OCR settings (Settings > AI Configuration > OCR Configuration):
+    the Tesseract language code to pass to image_to_string, and whether OCR
+    is attempted at all as a fallback for scanned PDFs/images. firm=None
+    (or no settings ever saved) means the defaults this pipeline has always
+    used - lang="eng", auto-OCR on - so every existing caller that doesn't
+    pass firm keeps behaving exactly as before.
+    """
+    if firm is None:
+        return dict(_OCR_DEFAULTS)
+
+    from accounts.models import FirmSettings
+
+    try:
+        settings_obj = FirmSettings.objects.get(firm=firm)
+    except FirmSettings.DoesNotExist:
+        return dict(_OCR_DEFAULTS)
+
+    stored = settings_obj.data.get("ocr") or {}
+    return {
+        "lang": stored.get("lang") or _OCR_DEFAULTS["lang"],
+        "auto_ocr": stored.get("auto_ocr", _OCR_DEFAULTS["auto_ocr"]),
+    }
+
+
 def extract_text_from_pdf(file_path: str, max_chars: Optional[int] = None) -> str:
     """
     Extract text from normal text-based PDF.
@@ -76,13 +105,17 @@ def extract_text_from_pdf(file_path: str, max_chars: Optional[int] = None) -> st
     return "\n".join(text_parts).strip()
 
 
-def extract_text_from_scanned_pdf(file_path: str, max_chars: Optional[int] = None) -> str:
+def extract_text_from_scanned_pdf(file_path: str, max_chars: Optional[int] = None, firm=None) -> str:
+    ocr_settings = _resolve_ocr_settings(firm)
+    if not ocr_settings["auto_ocr"]:
+        return ""
+
     pages = convert_from_path(file_path)
     text_parts = []
     total_chars = 0
 
     for page_number, image in enumerate(pages, start=1):
-        page_text = pytesseract.image_to_string(image, lang="eng")
+        page_text = pytesseract.image_to_string(image, lang=ocr_settings["lang"])
 
         if page_text.strip():
             text_parts.append(
@@ -96,14 +129,17 @@ def extract_text_from_scanned_pdf(file_path: str, max_chars: Optional[int] = Non
     return "\n".join(text_parts).strip()
 
 
-def extract_text_from_image(file_path: str) -> str:
+def extract_text_from_image(file_path: str, firm=None) -> str:
     """
     OCR a photo/scan of a document (JPG/PNG) using the same Tesseract
     pipeline used for scanned PDFs.
     """
+    ocr_settings = _resolve_ocr_settings(firm)
+    if not ocr_settings["auto_ocr"]:
+        return ""
 
     image = Image.open(file_path)
-    text = pytesseract.image_to_string(image, lang="eng")
+    text = pytesseract.image_to_string(image, lang=ocr_settings["lang"])
 
     return text.strip()
 
@@ -181,6 +217,7 @@ def extract_text_from_document(
     file_path: str,
     document_type: Optional[str] = None,
     max_chars: Optional[int] = None,
+    firm=None,
 ) -> str:
     """
     Universal document extractor.
@@ -199,6 +236,10 @@ def extract_text_from_document(
     summarize/risk/compliance/entities/compare), never from the RAG
     upload/chunking pipeline, which needs the complete document text to
     be fully searchable.
+
+    firm: whose OCR settings (Settings > AI Configuration > OCR
+    Configuration - language, auto-OCR on/off) apply when a scanned PDF or
+    image needs OCR. None uses this pipeline's original defaults.
     """
 
     if not os.path.exists(file_path):
@@ -211,13 +252,13 @@ def extract_text_from_document(
         text = extract_text_from_pdf(file_path, max_chars=max_chars)
 
         if not text:
-            text = extract_text_from_scanned_pdf(file_path, max_chars=max_chars)
+            text = extract_text_from_scanned_pdf(file_path, max_chars=max_chars, firm=firm)
 
     elif extension == "scanned_pdf":
-        text = extract_text_from_scanned_pdf(file_path, max_chars=max_chars)
+        text = extract_text_from_scanned_pdf(file_path, max_chars=max_chars, firm=firm)
 
     elif extension in IMAGE_EXTENSIONS:
-        text = extract_text_from_image(file_path)
+        text = extract_text_from_image(file_path, firm=firm)
 
     elif extension == "docx":
         text = extract_text_from_docx(file_path, max_chars=max_chars)

@@ -1,9 +1,7 @@
 import json
 from typing import Dict, List
 
-from django.conf import settings
-
-from .groq_client import get_groq_client
+from .llm_client import get_ai_client
 
 # Full document text sent directly to the LLM (not the chunked RAG
 # pipeline) since these operations need whole-document context. Capped to
@@ -15,11 +13,11 @@ def _truncate(text: str) -> str:
     return text[:MAX_DOCUMENT_CHARS]
 
 
-def summarize_document(document_text: str) -> str:
-    client = get_groq_client()
+def summarize_document(document_text: str, firm=None) -> str:
+    client = get_ai_client(firm)
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {
                 "role": "system",
@@ -40,11 +38,11 @@ def summarize_document(document_text: str) -> str:
     return response.choices[0].message.content
 
 
-def generate_client_summary(document_text: str) -> str:
-    client = get_groq_client()
+def generate_client_summary(document_text: str, firm=None) -> str:
+    client = get_ai_client(firm)
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {
                 "role": "system",
@@ -64,14 +62,14 @@ def generate_client_summary(document_text: str) -> str:
     return response.choices[0].message.content
 
 
-def extract_entities(document_text: str) -> Dict:
+def extract_entities(document_text: str, firm=None) -> Dict:
     """
     Structured entity extraction from OCR'd/parsed document text: dates,
     parties, case number, court name, sections/clauses referenced,
     monetary amounts, and addresses. Returns {} on any parsing failure
     rather than raising, so a bad LLM response degrades gracefully.
     """
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = """
 Extract structured entities from the legal document text below. Return
@@ -93,7 +91,7 @@ Rules:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": _truncate(document_text)},
@@ -118,14 +116,14 @@ Rules:
         return {}
 
 
-def analyze_risks(document_text: str) -> List[Dict]:
+def analyze_risks(document_text: str, firm=None) -> List[Dict]:
     """
     Flags legal/commercial risk areas in a document (unlimited liability,
     one-sided indemnities, missing notice periods, ambiguous termination,
     unfavorable jurisdiction, etc.) - similar lens to redlining, but
     framed as a standalone risk report rather than clause-by-clause edits.
     """
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = """
 You are an Indian legal AI assistant performing a risk analysis of a document.
@@ -140,7 +138,7 @@ Rules:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": _truncate(document_text)},
@@ -170,8 +168,8 @@ Rules:
         return []
 
 
-def compare_documents(text_a: str, name_a: str, text_b: str, name_b: str) -> str:
-    client = get_groq_client()
+def compare_documents(text_a: str, name_a: str, text_b: str, name_b: str, firm=None) -> str:
+    client = get_ai_client(firm)
 
     user_prompt = f"""
 Document A ({name_a}):
@@ -186,7 +184,7 @@ one but missing from the other. Use only what's in the documents.
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {
                 "role": "system",
@@ -219,13 +217,13 @@ COMPLIANCE_CHECKLIST = [
 ]
 
 
-def check_compliance(document_text: str) -> List[Dict]:
+def check_compliance(document_text: str, firm=None) -> List[Dict]:
     """
     Compliance Agent: checks a document against a standard checklist of
     commonly-expected clauses and flags what's missing, plus any
     regulatory/risk concerns found in what IS present.
     """
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     checklist_text = "\n".join(f"- {item}" for item in COMPLIANCE_CHECKLIST)
 
@@ -247,7 +245,7 @@ Rules:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": _truncate(document_text)},

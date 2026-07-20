@@ -817,7 +817,7 @@ def try_answer_firm_stats(question: str, firm):
 
     from .groq_client import classify_meta_question
 
-    classification = classify_meta_question(stripped)
+    classification = classify_meta_question(stripped, firm=firm)
     if classification is None:
         return None, None, False
 

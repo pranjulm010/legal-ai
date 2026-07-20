@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 from django.conf import settings
 from groq import Groq
 
+from .llm_client import get_ai_client
+
 
 def _history_messages(history: Optional[List[Dict[str, str]]]) -> list:
     """Turns a list of {"question", "answer"} pairs into proper alternating
@@ -37,6 +39,10 @@ PARTY or the ACCUSED/OTHER PARTY, and frame the advice accordingly:
 
 
 def get_groq_client():
+    """Platform-only Groq client, kept for any caller that genuinely wants
+    the platform's own key regardless of AI Provider Mode. Every function in
+    this module uses get_ai_client(firm) instead, which honors the firm's
+    mode - see rag/llm_client.py."""
     if not settings.GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY is missing in .env file.")
 
@@ -180,7 +186,7 @@ If is_meta_question is false, set entity to "none".
 """
 
 
-def classify_meta_question(question: str) -> Optional[dict]:
+def classify_meta_question(question: str, firm=None) -> Optional[dict]:
     """
     Uses the LLM to decide whether a question is asking about the firm's
     own operational data (case/document/lawyer/draft/contact/reminder
@@ -192,9 +198,9 @@ def classify_meta_question(question: str) -> Optional[dict]:
     """
 
     try:
-        client = get_groq_client()
+        client = get_ai_client(firm)
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=client.default_model,
             messages=[
                 {"role": "system", "content": _META_CLASSIFIER_PROMPT.strip()},
                 {"role": "user", "content": question},
@@ -235,7 +241,7 @@ Respond with ONLY a JSON object, no other text:
 """
 
 
-def classify_web_search_intent(question: str) -> bool:
+def classify_web_search_intent(question: str, firm=None) -> bool:
     """
     LLM fallback for detecting an explicit web-search request when the fast
     regex (rag_pipeline._WEB_INTENT_RE) doesn't match - covers typos and
@@ -248,9 +254,9 @@ def classify_web_search_intent(question: str) -> bool:
     search.
     """
     try:
-        client = get_groq_client()
+        client = get_ai_client(firm)
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=client.default_model,
             messages=[
                 {"role": "system", "content": _WEB_INTENT_CLASSIFIER_PROMPT.strip()},
                 {"role": "user", "content": question},
@@ -339,9 +345,12 @@ def generate_legal_answer(
     mode: str = "mixed",
     context_label: str = "The uploaded document",
     history: Optional[List[Dict[str, str]]] = None,
+    firm=None,
 ) -> str:
     """
-    Generate legal answer using Groq LLM. `mode` controls the answer's
+    Generate legal answer using the firm's configured AI provider (platform
+    Groq by default, or the firm's own BYOK provider - see
+    rag/llm_client.get_ai_client). `mode` controls the answer's
     style/register: plain_english, mixed, or professional. `context_label`
     names what was searched in the "not enough information" fallback line
     (e.g. "The uploaded document" vs "Your firm's documents") so the
@@ -349,7 +358,7 @@ def generate_legal_answer(
     turns from the same resumed chat session, if any.
     """
 
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = f"""
 You are an Indian legal AI assistant.
@@ -393,7 +402,7 @@ Now answer the question using only the provided document context.
     )
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=messages,
         temperature=0.1,
         max_tokens=1200,
@@ -406,6 +415,7 @@ def generate_knowledge_based_answer(
     question: str,
     mode: str = "mixed",
     history: Optional[List[Dict[str, str]]] = None,
+    firm=None,
 ) -> str:
     """
     Last-resort fallback: neither the firm's own documents nor a public
@@ -416,7 +426,7 @@ def generate_knowledge_based_answer(
     every other answer path.
     """
 
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = f"""
 You are an Indian legal AI assistant.
@@ -447,7 +457,7 @@ Always end with:
     )
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=messages,
         temperature=0.2,
         max_tokens=1200,
@@ -462,6 +472,7 @@ def generate_web_grounded_answer(
     mode: str = "mixed",
     context_label: str = "the user's uploaded document",
     history: Optional[List[Dict[str, str]]] = None,
+    firm=None,
 ) -> str:
     """
     Generate an answer using publicly scraped legal-web context, used
@@ -472,7 +483,7 @@ def generate_web_grounded_answer(
     documents") so the wording matches what was actually searched.
     """
 
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = f"""
 You are an Indian legal AI assistant.
@@ -514,7 +525,7 @@ Now answer the question using only the provided public web context.
     )
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=messages,
         temperature=0.1,
         max_tokens=1200,

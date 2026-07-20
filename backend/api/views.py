@@ -46,6 +46,7 @@ from rag.document_intelligence import (
     summarize_document,
 )
 from rag.document_processor import extract_text_from_document
+from rag.llm_errors import AIProviderNotConfigured
 from rag.rag_pipeline import process_uploaded_document, answer_question, answer_general_question
 from rag.research_agent import run_research_agent, run_agent
 from rag.vector_store import delete_document_chunks
@@ -427,6 +428,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     firm_id=document.firm_id,
                     allow_web_search=payload.allow_web_search,
                     answer_mode=payload.answer_mode,
+                    firm=request.auth.firm,
                 )
             else:
                 result = answer_question(
@@ -438,6 +440,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     answer_mode=payload.answer_mode,
                     history=history,
                     region=payload.region or request.auth.firm.default_region,
+                    firm=request.auth.firm,
                 )
         else:
             # No document selected and not a stats question - search the
@@ -521,6 +524,8 @@ def ask_question(request, payload: AskQuestionSchema):
             "confidence_level": result.get("confidence_level"),
         }
 
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         # Reproduced live: an upstream LLM provider error (e.g. a Groq
         # rate-limit response) was being forwarded to the client verbatim
@@ -828,6 +833,7 @@ def _read_document_text(document: UploadedDocument) -> str:
         file_path=document.file.path,
         document_type=document.document_type,
         max_chars=MAX_DOCUMENT_CHARS,
+        firm=document.firm,
     )
 
 
@@ -864,8 +870,10 @@ def compare_two_documents(request, payload: CompareDocumentsSchema):
 
     try:
         comparison = compare_documents(
-            text_a, document_a.original_name, text_b, document_b.original_name
+            text_a, document_a.original_name, text_b, document_b.original_name, firm=request.auth.firm
         )
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         print("COMPARISON ERROR:", error)
         return 500, {"error": "Comparison failed. Please try again.", "details": None}
@@ -895,7 +903,9 @@ def summarize_document_endpoint(request, document_id: str):
         return 400, {"error": f"Could not read document: {error}"}
 
     try:
-        summary = summarize_document(text)
+        summary = summarize_document(text, firm=request.auth.firm)
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         print("SUMMARIZATION ERROR:", error)
         return 500, {"error": "Summarization failed. Please try again.", "details": None}
@@ -925,7 +935,9 @@ def client_summary_endpoint(request, document_id: str):
         return 400, {"error": f"Could not read document: {error}"}
 
     try:
-        summary = generate_client_summary(text)
+        summary = generate_client_summary(text, firm=request.auth.firm)
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         print("CLIENT SUMMARY ERROR:", error)
         return 500, {"error": "Client summary generation failed. Please try again.", "details": None}
@@ -955,7 +967,9 @@ def risk_analysis_endpoint(request, document_id: str):
         return 400, {"error": f"Could not read document: {error}"}
 
     try:
-        risks = analyze_risks(text)
+        risks = analyze_risks(text, firm=request.auth.firm)
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         print("RISK ANALYSIS ERROR:", error)
         return 500, {"error": "Risk analysis failed. Please try again.", "details": None}
@@ -985,7 +999,9 @@ def entity_extraction_endpoint(request, document_id: str):
         return 400, {"error": f"Could not read document: {error}"}
 
     try:
-        entities = extract_entities(text)
+        entities = extract_entities(text, firm=request.auth.firm)
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         print("ENTITY EXTRACTION ERROR:", error)
         return 500, {"error": "Entity extraction failed. Please try again.", "details": None}
@@ -1018,7 +1034,9 @@ def compliance_check_endpoint(request, document_id: str):
         return 400, {"error": f"Could not read document: {error}"}
 
     try:
-        findings = check_compliance(text)
+        findings = check_compliance(text, firm=request.auth.firm)
+    except AIProviderNotConfigured as error:
+        return 400, {"error": str(error), "details": None}
     except Exception as error:
         print("COMPLIANCE CHECK ERROR:", error)
         return 500, {"error": "Compliance check failed. Please try again.", "details": None}

@@ -355,10 +355,10 @@ def tool_compare_documents(document_id_a: str, document_id_b: str, firm) -> Dict
     if doc_a.firm_id != firm.id or doc_b.firm_id != firm.id:
         return {"error": "You do not have access to one of these documents."}
 
-    text_a = extract_text_from_document(file_path=doc_a.file.path, document_type=doc_a.document_type)
-    text_b = extract_text_from_document(file_path=doc_b.file.path, document_type=doc_b.document_type)
+    text_a = extract_text_from_document(file_path=doc_a.file.path, document_type=doc_a.document_type, firm=firm)
+    text_b = extract_text_from_document(file_path=doc_b.file.path, document_type=doc_b.document_type, firm=firm)
 
-    comparison = _compare_documents_text(text_a, doc_a.original_name, text_b, doc_b.original_name)
+    comparison = _compare_documents_text(text_a, doc_a.original_name, text_b, doc_b.original_name, firm=firm)
 
     return {
         "comparison": comparison,
@@ -487,7 +487,7 @@ def tool_generate_draft(title: str, prompt: str, firm, created_by, case_id: Opti
             return {"error": "Case not found."}
 
     context = case.description if case else ""
-    content = _generate_draft_text(prompt=prompt, context=context)
+    content = _generate_draft_text(prompt=prompt, context=context, firm=firm)
 
     draft = Draft.objects.create(
         firm=firm,

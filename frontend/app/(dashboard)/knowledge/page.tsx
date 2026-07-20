@@ -14,8 +14,8 @@ function formatDate(value: string) {
 }
 
 export default function KnowledgePage() {
-  const { user } = useAuth();
-  const canDeleteChat = hasPermission(user?.role, "delete_chat");
+  const { user, permissions } = useAuth();
+  const canDeleteChat = hasPermission(user?.role, "delete_chat", permissions);
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ChatSearchResult[]>([]);

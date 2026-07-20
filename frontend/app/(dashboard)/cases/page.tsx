@@ -10,8 +10,8 @@ const CASE_TYPES = ["civil", "criminal", "corporate", "family", "property", "oth
 const STATUSES = ["open", "in_progress", "on_hold", "closed"];
 
 export default function CasesPage() {
-  const { user } = useAuth();
-  const canCreateCase = hasPermission(user?.role, "create_case");
+  const { user, permissions } = useAuth();
+  const canCreateCase = hasPermission(user?.role, "create_case", permissions);
 
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [loading, setLoading] = useState(true);

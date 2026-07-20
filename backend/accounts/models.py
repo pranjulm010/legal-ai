@@ -53,6 +53,22 @@ class Firm(models.Model):
         help_text="Jurisdiction used for web search when a question doesn't specify one.",
     )
 
+    AI_PROVIDER_MODE_CHOICES = [
+        ("platform_managed", "Platform Managed (SaaS)"),
+        ("customer_managed", "Customer Managed (Bring Your Own API Key)"),
+    ]
+    ai_provider_mode = models.CharField(
+        max_length=20,
+        choices=AI_PROVIDER_MODE_CHOICES,
+        default="platform_managed",
+        help_text=(
+            "Which API keys pay for this firm's AI requests. platform_managed "
+            "(default) uses the platform's own keys - customer_managed routes "
+            "every AI request through the firm's own connected provider "
+            "credential instead. Never both at once - see rag/llm_client.py."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -138,3 +154,117 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.action} ({self.firm.name})"
+
+
+class RolePermissionOverride(models.Model):
+    """
+    Per-firm deviation from the hardcoded ROLE_PERMISSIONS default (see
+    accounts/permissions.py). Deliberately an OVERRIDE table, not the
+    source of truth - a firm with zero rows here behaves EXACTLY like the
+    hardcoded matrix always has, so shipping this feature carries no risk
+    to any of the ~19 existing require_permission() call sites across the
+    codebase. "public" is intentionally never a valid role here (enforced
+    in the API layer, not the model) - public users are always solo in
+    their own isolated pseudo-firm with no team/case/draft/contact
+    surface to customize.
+    """
+
+    firm = models.ForeignKey(Firm, on_delete=models.CASCADE, related_name="permission_overrides")
+    role = models.CharField(max_length=20, choices=LawyerProfile.ROLE_CHOICES)
+    action = models.CharField(max_length=100)
+    granted = models.BooleanField()
+    updated_by = models.ForeignKey(
+        LawyerProfile, on_delete=models.SET_NULL, null=True, related_name="+"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("firm", "role", "action")
+
+    def __str__(self):
+        return f"{self.firm.name}: {self.role}.{self.action} = {self.granted}"
+
+
+class FirmSettings(models.Model):
+    """
+    Generic per-firm key-value settings store, namespaced by top-level key
+    inside `data` (e.g. data["appearance"], data["notifications"]) so one
+    row covers multiple unrelated Settings categories instead of a new
+    model per category.
+    """
+
+    firm = models.OneToOneField(Firm, on_delete=models.CASCADE, related_name="settings")
+    data = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Settings for {self.firm.name}"
+
+
+class AIProviderCredential(models.Model):
+    """
+    A firm's own BYOK credential for one AI provider (Settings > AI
+    Configuration > API Integrations). Only meaningful when
+    Firm.ai_provider_mode == "customer_managed" - see rag/llm_client.py's
+    get_ai_client(), the single choke point that decides whether a request
+    uses the platform's own key or one of these. `enabled` is enforced to
+    be true for at most one credential per firm (in the API layer, not the
+    DB) - "exactly one active provider" is the whole point of this
+    feature, mirroring RolePermissionOverride's "override table, not
+    source of truth for the default case" philosophy: a firm with zero
+    rows here, or with ai_provider_mode still "platform_managed", behaves
+    exactly as it always has.
+    """
+
+    PROVIDER_CHOICES = [
+        ("openai", "OpenAI"),
+        ("anthropic", "Anthropic"),
+        ("google_gemini", "Google Gemini"),
+        ("azure_openai", "Azure OpenAI"),
+        ("groq", "Groq"),
+        ("mistral", "Mistral"),
+    ]
+
+    STATUS_CHOICES = [
+        ("untested", "Untested"),
+        ("connected", "Connected"),
+        ("failed", "Failed"),
+    ]
+
+    firm = models.ForeignKey(Firm, on_delete=models.CASCADE, related_name="ai_provider_credentials")
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+
+    # Fernet-encrypted (accounts/encryption.py) - never store or return
+    # plaintext. NEVER exposed to the frontend; API responses only ever
+    # return a masked hint (e.g. last 4 chars).
+    encrypted_api_key = models.TextField()
+
+    # Azure OpenAI needs a resource endpoint; some providers/self-hosted
+    # gateways may need a base_url override. Blank for providers that
+    # don't need it.
+    base_url = models.CharField(max_length=500, blank=True, default="")
+
+    # Free-text model id (or, for Azure, the deployment name) rather than
+    # a hardcoded dropdown - provider model catalogs change constantly and
+    # a fixed choices list would go stale.
+    model = models.CharField(max_length=200, blank=True, default="")
+
+    # Provider-specific extras, e.g. Azure's {"api_version": "2024-10-21"}.
+    extra_config = models.JSONField(default=dict, blank=True)
+
+    enabled = models.BooleanField(default=False)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="untested")
+    last_tested_at = models.DateTimeField(null=True, blank=True)
+    last_test_message = models.CharField(max_length=500, blank=True, default="")
+
+    created_by = models.ForeignKey(
+        LawyerProfile, on_delete=models.SET_NULL, null=True, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("firm", "provider")
+
+    def __str__(self):
+        return f"{self.firm.name}: {self.provider} ({self.status})"

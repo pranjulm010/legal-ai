@@ -23,3 +23,17 @@ groq==0.37.1
 google-api-python-client==2.197.0
 google-auth==2.53.0
 google-auth-oauthlib==1.4.0
+
+cryptography==43.0.3
+# openai>=1.60 and anthropic>=0.40 required - older pins construct their
+# internal httpx.Client with a `proxies` kwarg that httpx>=0.28 (already
+# required by other packages in this environment) removed, causing every
+# BYOK OpenAI/Azure OpenAI/Mistral/Anthropic client construction to raise
+# "unexpected keyword argument 'proxies'".
+openai>=1.60.0
+anthropic>=0.40.0
+# Google Gemini's BYOK adapter (rag/llm_adapters.py) talks to the Generative
+# Language REST API directly via `requests` rather than the google-generativeai
+# SDK - that SDK's API key is set via a process-global genai.configure() call,
+# which is unsafe when concurrent requests from different firms use different
+# customer keys.

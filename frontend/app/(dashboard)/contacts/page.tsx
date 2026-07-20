@@ -13,8 +13,8 @@ import {
 } from "@/lib/api";
 
 export default function ContactsPage() {
-  const { user } = useAuth();
-  const canManage = hasPermission(user?.role, "manage_contacts");
+  const { user, permissions } = useAuth();
+  const canManage = hasPermission(user?.role, "manage_contacts", permissions);
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);

@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   fetchMe,
+  getMyPermissions,
   login as loginApi,
   logout as logoutApi,
   register as registerApi,
@@ -30,6 +31,11 @@ type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
+  // Effective action list for the current user (hardcoded role defaults +
+  // any per-firm RBAC overrides), fetched from GET /auth/my-permissions/.
+  // null while it hasn't loaded yet - callers should fall back to the
+  // hardcoded lib/permissions.ts matrix during that window.
+  permissions: string[] | null;
   login: (username: string, password: string) => Promise<string>;
   register: (
     username: string,
@@ -48,13 +54,24 @@ type AuthContextValue = {
   ) => Promise<void>;
   completeInvite: (uid: string, token: string, password: string) => Promise<void>;
   logout: () => void;
+  // Re-fetch the effective action list without a full page reload - call
+  // after an RBAC override change that could affect the current user's own
+  // role, so the UI reflects it immediately instead of on next login.
+  refreshPermissions: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [permissions, setPermissions] = useState<string[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const loadPermissions = useCallback(() => {
+    getMyPermissions()
+      .then(setPermissions)
+      .catch(() => setPermissions(null));
+  }, []);
 
   useEffect(() => {
     const hydrate = async () => {
@@ -66,6 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const me = await fetchMe();
         setUser(me);
+        loadPermissions();
       } catch {
         setUser(null);
       } finally {
@@ -74,7 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     hydrate();
-  }, []);
+  }, [loadPermissions]);
 
   const login = useCallback(async (username: string, password: string) => {
     const data = await loginApi(username, password);
@@ -87,9 +105,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       firm_name: data.firm_name,
       firm_size: data.firm_size,
     });
+    loadPermissions();
 
     return data.role;
-  }, []);
+  }, [loadPermissions]);
 
   const register = useCallback(
     async (
@@ -119,8 +138,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         firm_name: data.firm_name,
         firm_size: data.firm_size,
       });
+      loadPermissions();
     },
-    []
+    [loadPermissions]
   );
 
   const registerPublic = useCallback(
@@ -135,8 +155,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         firm_name: data.firm_name,
         firm_size: data.firm_size,
       });
+      loadPermissions();
     },
-    []
+    [loadPermissions]
   );
 
   const completeInvite = useCallback(
@@ -151,18 +172,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         firm_name: data.firm_name,
         firm_size: data.firm_size,
       });
+      loadPermissions();
     },
-    []
+    [loadPermissions]
   );
 
   const logout = useCallback(() => {
     logoutApi();
     setUser(null);
+    setPermissions(null);
   }, []);
 
   return (
     <AuthContext.Provider
-      value={{ user, isLoading, login, register, registerPublic, completeInvite, logout }}
+      value={{
+        user,
+        permissions,
+        isLoading,
+        login,
+        register,
+        registerPublic,
+        completeInvite,
+        logout,
+        refreshPermissions: loadPermissions,
+      }}
     >
       {children}
     </AuthContext.Provider>

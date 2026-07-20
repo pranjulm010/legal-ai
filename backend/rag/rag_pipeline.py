@@ -110,7 +110,7 @@ _WEB_INTENT_RE = re.compile(
 )
 
 
-def _explicit_web_intent(question: str) -> bool:
+def _explicit_web_intent(question: str, firm=None) -> bool:
     """
     Whether the user's own wording explicitly asked for a web search.
     Regex fast-path first (cheap, no LLM round-trip); if it doesn't match,
@@ -126,7 +126,7 @@ def _explicit_web_intent(question: str) -> bool:
 
     from .groq_client import classify_web_search_intent
 
-    return classify_web_search_intent(question)
+    return classify_web_search_intent(question, firm=firm)
 
 
 def process_uploaded_document(document) -> int:
@@ -136,7 +136,8 @@ def process_uploaded_document(document) -> int:
 
     extracted_text = extract_text_from_document(
         file_path=file_path,
-        document_type=document_type
+        document_type=document_type,
+        firm=document.firm,
     )
 
     chunks = chunk_text(
@@ -235,7 +236,7 @@ def _build_document_sources(chunks: List[Dict]) -> List[Dict]:
     return sources
 
 
-def _web_search_result(question, web_results, answer_mode, history, region, context_label) -> Dict:
+def _web_search_result(question, web_results, answer_mode, history, region, context_label, firm=None) -> Dict:
     web_context = build_web_context(web_results)
     answer = generate_web_grounded_answer(
         question=question,
@@ -243,6 +244,7 @@ def _web_search_result(question, web_results, answer_mode, history, region, cont
         mode=answer_mode,
         context_label=context_label,
         history=history,
+        firm=firm,
     )
 
     sources = [
@@ -265,8 +267,8 @@ def _web_search_result(question, web_results, answer_mode, history, region, cont
     }
 
 
-def _llm_knowledge_result(question, answer_mode, history, disclaimer: str) -> Dict:
-    answer = generate_knowledge_based_answer(question=question, mode=answer_mode, history=history)
+def _llm_knowledge_result(question, answer_mode, history, disclaimer: str, firm=None) -> Dict:
+    answer = generate_knowledge_based_answer(question=question, mode=answer_mode, history=history, firm=firm)
     return {
         "answer": f"{disclaimer}\n\n{answer}",
         "sources": [],
@@ -310,6 +312,7 @@ def answer_question(
     answer_mode: str = "mixed",
     history: Optional[List[Dict]] = None,
     region: str = "india",
+    firm=None,
 ) -> Dict:
     """
     Retrieval routing for a question scoped to one uploaded document.
@@ -346,6 +349,7 @@ def answer_question(
             mode=answer_mode,
             context_label="The uploaded document",
             history=history,
+            firm=firm,
         )
         # A chunk can pass the distance threshold without actually
         # answering the question - trust the model's own admission over
@@ -372,7 +376,7 @@ def answer_question(
             }
 
     # The uploaded document didn't answer it.
-    explicit_web = _explicit_web_intent(question)
+    explicit_web = _explicit_web_intent(question, firm=firm)
 
     if is_public:
         # No firm-database step for the general public - go straight to
@@ -383,9 +387,11 @@ def answer_question(
             if web_results:
                 return _web_search_result(
                     question, web_results, answer_mode, history, region,
-                    context_label="the uploaded document",
+                    context_label="the uploaded document", firm=firm,
                 )
-            return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_web_results(region))
+            return _llm_knowledge_result(
+                question, answer_mode, history, disclaimer_no_web_results(region), firm=firm
+            )
 
         return _ask_web_consent(chunks, best_distance)
 
@@ -403,6 +409,7 @@ def answer_question(
             mode=answer_mode,
             context_label="Your firm's documents",
             history=history,
+            firm=firm,
         )
         if not is_insufficient_answer(firm_answer):
             return {
@@ -421,11 +428,13 @@ def answer_question(
     web_results = search_legal_web(question, region=region)
 
     if not web_results:
-        return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_doc_firm_or_web(region))
+        return _llm_knowledge_result(
+            question, answer_mode, history, disclaimer_no_doc_firm_or_web(region), firm=firm
+        )
 
     return _web_search_result(
         question, web_results, answer_mode, history, region,
-        context_label="your uploaded documents or firm database",
+        context_label="your uploaded documents or firm database", firm=firm,
     )
 
 
@@ -541,11 +550,11 @@ def _match_document_by_name(question: str, firm):
     return None
 
 
-def _summarize_named_document(document) -> Dict:
+def _summarize_named_document(document, firm=None) -> Dict:
     from .document_intelligence import summarize_document
 
     text = _read_document_text(document)
-    summary = summarize_document(text)
+    summary = summarize_document(text, firm=firm)
 
     return {
         "answer": summary,
@@ -577,6 +586,7 @@ def _read_document_text(document) -> str:
         file_path=document.file.path,
         document_type=document.document_type,
         max_chars=MAX_DOCUMENT_CHARS,
+        firm=document.firm,
     )
 
 
@@ -622,14 +632,14 @@ def answer_general_question(
 
     if named_document is not None:
         try:
-            result = _summarize_named_document(named_document)
+            result = _summarize_named_document(named_document, firm=firm)
             result["route"] = ROUTE_UPLOADED_DOCUMENT
             result["confidence_level"] = CONFIDENCE_BY_ROUTE[ROUTE_UPLOADED_DOCUMENT]
             return result
         except (FileNotFoundError, ValueError):
             pass  # fall through to normal search if the file can't be read
 
-    explicit_web = _explicit_web_intent(question)
+    explicit_web = _explicit_web_intent(question, firm=firm)
 
     from api.models import UploadedDocument
 
@@ -642,9 +652,11 @@ def answer_general_question(
             if web_results:
                 return _web_search_result(
                     question, web_results, answer_mode, history, region,
-                    context_label="a document",
+                    context_label="a document", firm=firm,
                 )
-            return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_web_results(region))
+            return _llm_knowledge_result(
+                question, answer_mode, history, disclaimer_no_web_results(region), firm=firm
+            )
 
         return _ask_web_consent([], float("inf"))
 
@@ -663,6 +675,7 @@ def answer_general_question(
             mode=answer_mode,
             context_label=context_label,
             history=history,
+            firm=firm,
         )
         # A chunk can pass the distance threshold without actually
         # answering the question - trust the model's own admission over
@@ -683,9 +696,11 @@ def answer_general_question(
             if web_results:
                 return _web_search_result(
                     question, web_results, answer_mode, history, region,
-                    context_label="your uploaded documents",
+                    context_label="your uploaded documents", firm=firm,
                 )
-            return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_web_results(region))
+            return _llm_knowledge_result(
+                question, answer_mode, history, disclaimer_no_web_results(region), firm=firm
+            )
 
         return _ask_web_consent(chunks, best_distance)
 
@@ -697,8 +712,10 @@ def answer_general_question(
         if web_results:
             return _web_search_result(
                 question, web_results, answer_mode, history, region,
-                context_label="the firm's documents",
+                context_label="the firm's documents", firm=firm,
             )
-        return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_firm_or_web(region))
+        return _llm_knowledge_result(
+            question, answer_mode, history, disclaimer_no_firm_or_web(region), firm=firm
+        )
 
     return _ask_web_consent(chunks, best_distance)

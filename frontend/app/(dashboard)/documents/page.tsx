@@ -52,8 +52,8 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export default function DocumentsPage() {
-  const { user } = useAuth();
-  const canDeleteDocument = hasPermission(user?.role, "delete_document");
+  const { user, permissions } = useAuth();
+  const canDeleteDocument = hasPermission(user?.role, "delete_document", permissions);
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [loading, setLoading] = useState(true);

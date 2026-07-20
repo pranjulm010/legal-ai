@@ -33,10 +33,10 @@ export default function CaseDetailPage() {
   const router = useRouter();
   const caseId = params.caseId;
 
-  const { user } = useAuth();
-  const canEditCase = hasPermission(user?.role, "edit_case");
-  const canDeleteCase = hasPermission(user?.role, "delete_case");
-  const canDeleteDocument = hasPermission(user?.role, "delete_document");
+  const { user, permissions } = useAuth();
+  const canEditCase = hasPermission(user?.role, "edit_case", permissions);
+  const canDeleteCase = hasPermission(user?.role, "delete_case", permissions);
+  const canDeleteDocument = hasPermission(user?.role, "delete_document", permissions);
 
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);

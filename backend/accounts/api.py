@@ -15,11 +15,14 @@ from ninja.files import UploadedFile
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from django.utils import timezone
+
 from .audit import log_audit_event
 from .auth import JWTAuth
 from .emails import build_invite_link, send_lawyer_invite_email
-from .models import Firm, LawyerProfile
-from .permissions import require_permission
+from .encryption import decrypt_secret, encrypt_secret
+from .models import AIProviderCredential, Firm, FirmSettings, LawyerProfile, RolePermissionOverride
+from .permissions import ALL_ACTIONS, has_permission, require_permission
 from .rate_limit import client_ip, rate_limit_exceeded
 from cases.sample_data import seed_sample_documents
 
@@ -960,3 +963,645 @@ def admin_dashboard(request):
             for log in recent_logs
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# RBAC (Settings > Role-Based Access Control)
+# ---------------------------------------------------------------------------
+
+
+class RbacEntrySchema(Schema):
+    role: str
+    action: str
+    granted: bool
+    source: str  # "default" (from the hardcoded matrix) or "override"
+
+
+class RbacUpdateItemSchema(Schema):
+    role: str
+    action: str
+    granted: Optional[bool] = None  # None = delete the override, revert to default
+
+
+class RbacUpdateSchema(Schema):
+    updates: List[RbacUpdateItemSchema]
+
+
+def _build_rbac_entries(firm) -> List[dict]:
+    overrides = {
+        (o.role, o.action): o.granted
+        for o in RolePermissionOverride.objects.filter(firm=firm)
+    }
+    entries = []
+    for role in FIRM_ASSIGNABLE_ROLES:
+        for action in ALL_ACTIONS:
+            key = (role, action)
+            if key in overrides:
+                entries.append({"role": role, "action": action, "granted": overrides[key], "source": "override"})
+            else:
+                entries.append({"role": role, "action": action, "granted": has_permission(role, action), "source": "default"})
+    return entries
+
+
+@router.get("/rbac/", auth=JWTAuth(), response={200: List[RbacEntrySchema], 403: ErrorSchema})
+def get_rbac_matrix(request):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    return 200, _build_rbac_entries(request.auth.firm)
+
+
+@router.patch(
+    "/rbac/",
+    auth=JWTAuth(),
+    response={200: List[RbacEntrySchema], 400: ErrorSchema, 403: ErrorSchema},
+)
+def update_rbac_matrix(request, payload: RbacUpdateSchema):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+
+    for item in payload.updates:
+        if item.role not in FIRM_ASSIGNABLE_ROLES:
+            return 400, {"error": f'"{item.role}" is not a valid role for permission overrides.'}
+        if item.action not in ALL_ACTIONS:
+            return 400, {"error": f'"{item.action}" is not a recognized permission action.'}
+        if item.role == "admin" and item.action == "manage_team" and item.granted is False:
+            return 400, {
+                "error": (
+                    "The admin role's team-management permission can't be revoked - "
+                    "this would lock the firm out of managing itself."
+                )
+            }
+
+    for item in payload.updates:
+        if item.granted is None:
+            RolePermissionOverride.objects.filter(firm=firm, role=item.role, action=item.action).delete()
+        else:
+            RolePermissionOverride.objects.update_or_create(
+                firm=firm,
+                role=item.role,
+                action=item.action,
+                defaults={"granted": item.granted, "updated_by": request.auth},
+            )
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="rbac_override_changed",
+        details=f"Updated {len(payload.updates)} permission override(s).",
+    )
+
+    return 200, _build_rbac_entries(firm)
+
+
+class MyPermissionsSchema(Schema):
+    actions: List[str]
+
+
+@router.get("/my-permissions/", auth=JWTAuth(), response={200: MyPermissionsSchema})
+def get_my_permissions(request):
+    """
+    Every logged-in lawyer's own effective permission list (default matrix
+    merged with any firm override rows) - what the frontend's permission
+    mirror (lib/permissions.ts) reads live instead of relying on its own
+    hardcoded copy, which would otherwise silently drift once RBAC becomes
+    editable.
+    """
+    role = request.auth.role
+    firm = request.auth.firm
+    actions = [action for action in ALL_ACTIONS if has_permission(role, action, firm=firm)]
+    return 200, {"actions": actions}
+
+
+# ---------------------------------------------------------------------------
+# Audit logs (Settings > Audit Logs) - paginated/filterable, supersedes the
+# capped-at-20 list embedded in admin_dashboard above.
+# ---------------------------------------------------------------------------
+
+
+class AuditLogListSchema(Schema):
+    items: List[AuditLogItemSchema]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.get("/audit-logs/", auth=JWTAuth(), response={200: AuditLogListSchema, 403: ErrorSchema})
+def list_audit_logs(
+    request,
+    page: int = 1,
+    page_size: int = 20,
+    action: Optional[str] = None,
+    actor_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    logs = request.auth.firm.audit_logs.select_related("actor__user")
+
+    if action:
+        logs = logs.filter(action__icontains=action)
+    if actor_id:
+        logs = logs.filter(actor_id=actor_id)
+    if date_from:
+        logs = logs.filter(created_at__date__gte=date_from)
+    if date_to:
+        logs = logs.filter(created_at__date__lte=date_to)
+
+    total = logs.count()
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    start = (page - 1) * page_size
+    page_items = logs[start:start + page_size]
+
+    return 200, {
+        "items": [
+            {
+                "id": log.id,
+                "actor_name": (
+                    (log.actor.user.get_full_name() or log.actor.user.username)
+                    if log.actor
+                    else None
+                ),
+                "action": log.action,
+                "details": log.details,
+                "created_at": log.created_at,
+            }
+            for log in page_items
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Generic firm settings store (Settings > Appearance / Notifications / the
+# mock-category panels) - one row per firm, namespaced inside `data` so
+# unrelated categories share it instead of needing a model each.
+# ---------------------------------------------------------------------------
+
+
+class FirmSettingsSchema(Schema):
+    data: dict
+
+
+class FirmSettingsUpdateSchema(Schema):
+    namespace: str
+    patch: dict
+
+
+@router.get("/firm-settings/", auth=JWTAuth(), response={200: FirmSettingsSchema})
+def get_firm_settings(request):
+    settings_obj, _ = FirmSettings.objects.get_or_create(firm=request.auth.firm)
+    return 200, {"data": settings_obj.data}
+
+
+@router.patch("/firm-settings/", auth=JWTAuth(), response={200: FirmSettingsSchema, 400: ErrorSchema})
+def update_firm_settings(request, payload: FirmSettingsUpdateSchema):
+    if not payload.namespace or not isinstance(payload.patch, dict):
+        return 400, {"error": "namespace and patch are required."}
+
+    settings_obj, _ = FirmSettings.objects.get_or_create(firm=request.auth.firm)
+    namespace_data = settings_obj.data.get(payload.namespace)
+    if not isinstance(namespace_data, dict):
+        namespace_data = {}
+    namespace_data.update(payload.patch)
+    settings_obj.data[payload.namespace] = namespace_data
+    settings_obj.save(update_fields=["data", "updated_at"])
+
+    log_audit_event(
+        firm=request.auth.firm,
+        actor=request.auth,
+        action="firm_settings_updated",
+        details=f'Updated "{payload.namespace}" settings.',
+    )
+
+    return 200, {"data": settings_obj.data}
+
+
+# ---------------------------------------------------------------------------
+# AI Provider Mode (Settings > AI Configuration) - Platform Managed (SaaS)
+# vs Customer Managed (BYOK). See rag/llm_client.get_ai_client(), the single
+# choke point every AI-calling function in the codebase routes through,
+# which reads Firm.ai_provider_mode and (in customer_managed mode) the
+# firm's enabled AIProviderCredential - never both, never a silent fallback
+# between them. All endpoints below are gated the same way as every other
+# admin-only Settings surface added this session (RBAC, Team, Audit Logs).
+# ---------------------------------------------------------------------------
+
+
+class AiProviderModeSchema(Schema):
+    mode: str
+    has_connected_credential: bool
+
+
+class AiProviderModeUpdateSchema(Schema):
+    mode: str
+
+
+class AiProviderSummarySchema(Schema):
+    provider: str
+    configured: bool
+    enabled: bool
+    status: str
+    last_tested_at: Optional[datetime] = None
+    last_test_message: str
+    key_hint: str
+    base_url: str
+    model: str
+
+
+class AiProviderCredentialSaveSchema(Schema):
+    api_key: str
+    base_url: str = ""
+    model: str = ""
+    extra_config: dict = {}
+
+
+class SuccessSchema(Schema):
+    success: bool
+
+
+_AI_PROVIDER_IDS = [provider for provider, _ in AIProviderCredential.PROVIDER_CHOICES]
+
+
+def _mask_key_hint(credential) -> str:
+    if credential is None or not credential.encrypted_api_key:
+        return ""
+    try:
+        plaintext = decrypt_secret(credential.encrypted_api_key)
+    except ValueError:
+        return "••••"
+    return f"••••{plaintext[-4:]}" if len(plaintext) >= 4 else "••••"
+
+
+def _serialize_ai_provider(provider: str, credential) -> dict:
+    if credential is None:
+        return {
+            "provider": provider,
+            "configured": False,
+            "enabled": False,
+            "status": "untested",
+            "last_tested_at": None,
+            "last_test_message": "",
+            "key_hint": "",
+            "base_url": "",
+            "model": "",
+        }
+    return {
+        "provider": provider,
+        "configured": True,
+        "enabled": credential.enabled,
+        "status": credential.status,
+        "last_tested_at": credential.last_tested_at,
+        "last_test_message": credential.last_test_message,
+        "key_hint": _mask_key_hint(credential),
+        "base_url": credential.base_url,
+        "model": credential.model,
+    }
+
+
+def _get_credential_or_error(firm, provider: str):
+    if provider not in _AI_PROVIDER_IDS:
+        return None, (400, {"error": f"'{provider}' is not a recognized AI provider."})
+    try:
+        return firm.ai_provider_credentials.get(provider=provider), None
+    except AIProviderCredential.DoesNotExist:
+        return None, (400, {"error": f"No credential saved yet for {provider}."})
+
+
+@router.get("/ai-provider-mode/", auth=JWTAuth(), response={200: AiProviderModeSchema})
+def get_ai_provider_mode(request):
+    firm = request.auth.firm
+    has_connected = firm.ai_provider_credentials.filter(enabled=True, status="connected").exists()
+    return 200, {"mode": firm.ai_provider_mode, "has_connected_credential": has_connected}
+
+
+@router.patch(
+    "/ai-provider-mode/",
+    auth=JWTAuth(),
+    response={200: AiProviderModeSchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def update_ai_provider_mode(request, payload: AiProviderModeUpdateSchema):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    if payload.mode not in ("platform_managed", "customer_managed"):
+        return 400, {"error": "mode must be 'platform_managed' or 'customer_managed'."}
+
+    firm = request.auth.firm
+
+    if payload.mode == "customer_managed":
+        has_connected = firm.ai_provider_credentials.filter(enabled=True, status="connected").exists()
+        if not has_connected:
+            return 400, {
+                "error": (
+                    "Connect and enable at least one AI provider in API Integrations "
+                    "before switching to Customer Managed mode."
+                )
+            }
+
+    firm.ai_provider_mode = payload.mode
+    firm.save(update_fields=["ai_provider_mode"])
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="ai_provider_mode_changed",
+        details=f"Switched AI Provider Mode to {payload.mode}.",
+    )
+
+    has_connected = firm.ai_provider_credentials.filter(enabled=True, status="connected").exists()
+    return 200, {"mode": firm.ai_provider_mode, "has_connected_credential": has_connected}
+
+
+@router.get(
+    "/ai-providers/",
+    auth=JWTAuth(),
+    response={200: List[AiProviderSummarySchema], 403: ErrorSchema},
+)
+def list_ai_providers(request):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+    credentials = {c.provider: c for c in firm.ai_provider_credentials.all()}
+    return 200, [_serialize_ai_provider(provider, credentials.get(provider)) for provider in _AI_PROVIDER_IDS]
+
+
+@router.put(
+    "/ai-providers/{provider}/",
+    auth=JWTAuth(),
+    response={200: AiProviderSummarySchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def save_ai_provider_credential(request, provider: str, payload: AiProviderCredentialSaveSchema):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    if provider not in _AI_PROVIDER_IDS:
+        return 400, {"error": f"'{provider}' is not a recognized AI provider."}
+    if not payload.api_key or not payload.api_key.strip():
+        return 400, {"error": "api_key is required."}
+
+    firm = request.auth.firm
+    credential, _ = AIProviderCredential.objects.update_or_create(
+        firm=firm,
+        provider=provider,
+        defaults={
+            "encrypted_api_key": encrypt_secret(payload.api_key.strip()),
+            "base_url": payload.base_url.strip(),
+            "model": payload.model.strip(),
+            "extra_config": payload.extra_config or {},
+            "status": "untested",
+            "last_tested_at": None,
+            "last_test_message": "",
+            "created_by": request.auth,
+        },
+    )
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="ai_provider_credential_saved",
+        details=f"Saved credentials for {provider}.",
+    )
+
+    return 200, _serialize_ai_provider(provider, credential)
+
+
+@router.post(
+    "/ai-providers/{provider}/test/",
+    auth=JWTAuth(),
+    response={200: AiProviderSummarySchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def test_ai_provider_connection(request, provider: str):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    from rag.llm_client import test_provider_connection
+
+    firm = request.auth.firm
+    credential, error = _get_credential_or_error(firm, provider)
+    if error:
+        return error
+
+    success, message = test_provider_connection(credential)
+    credential.status = "connected" if success else "failed"
+    credential.last_tested_at = timezone.now()
+    credential.last_test_message = message
+    credential.save(update_fields=["status", "last_tested_at", "last_test_message"])
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="ai_provider_test_connection",
+        details=f"Tested {provider}: {'success' if success else 'failed'} - {message}",
+    )
+
+    return 200, _serialize_ai_provider(provider, credential)
+
+
+@router.post(
+    "/ai-providers/{provider}/enable/",
+    auth=JWTAuth(),
+    response={200: AiProviderSummarySchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def enable_ai_provider(request, provider: str):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+    credential, error = _get_credential_or_error(firm, provider)
+    if error:
+        return error
+
+    if credential.status != "connected":
+        return 400, {"error": "Test the connection successfully before enabling this provider."}
+
+    firm.ai_provider_credentials.exclude(id=credential.id).update(enabled=False)
+    credential.enabled = True
+    credential.save(update_fields=["enabled"])
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="ai_provider_enabled",
+        details=f"Enabled {provider} as the active BYOK provider.",
+    )
+
+    return 200, _serialize_ai_provider(provider, credential)
+
+
+@router.post(
+    "/ai-providers/{provider}/disable/",
+    auth=JWTAuth(),
+    response={200: AiProviderSummarySchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def disable_ai_provider(request, provider: str):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+    credential, error = _get_credential_or_error(firm, provider)
+    if error:
+        return error
+
+    if credential.enabled and firm.ai_provider_mode == "customer_managed":
+        return 400, {
+            "error": (
+                "This is the active provider for Customer Managed mode - enable a "
+                "different provider first, or switch back to Platform Managed."
+            )
+        }
+
+    credential.enabled = False
+    credential.save(update_fields=["enabled"])
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="ai_provider_disabled",
+        details=f"Disabled {provider}.",
+    )
+
+    return 200, _serialize_ai_provider(provider, credential)
+
+
+@router.delete(
+    "/ai-providers/{provider}/",
+    auth=JWTAuth(),
+    response={200: SuccessSchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def delete_ai_provider_credential(request, provider: str):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+    credential, error = _get_credential_or_error(firm, provider)
+    if error:
+        return error
+
+    if credential.enabled and firm.ai_provider_mode == "customer_managed":
+        return 400, {
+            "error": (
+                "This is the active provider for Customer Managed mode - enable a "
+                "different provider first, or switch back to Platform Managed."
+            )
+        }
+
+    credential.delete()
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="ai_provider_credential_deleted",
+        details=f"Deleted stored credential for {provider}.",
+    )
+
+    return 200, {"success": True}
+
+
+# ---------------------------------------------------------------------------
+# Danger Zone (Settings > Danger Zone) - irreversible-feeling, firm-level
+# actions. Both reuse mechanisms that already exist and are already proven
+# elsewhere in this codebase rather than inventing new ones:
+#   - "Deactivate all lawyers" is a bulk version of update_lawyer's existing
+#     per-lawyer User.is_active toggle (used by Team Management's
+#     Deactivate/Reactivate buttons) - fully reversible from Team Management.
+#   - "Delete this firm" sets Firm.is_active = False, the exact field
+#     JWTAuth.authenticate() already checks on every request to block a
+#     suspended firm from logging in. This is a SOFT delete, not the hard,
+#     cascading delete available separately to platform super-admins
+#     (accounts/super_admin_api.py's delete_firm) - data is never destroyed,
+#     only login is blocked, and only a super-admin can undo it (the firm's
+#     own admin is immediately locked out too, so there's no self-service
+#     undo - this is intentional given the severity of the action).
+# ---------------------------------------------------------------------------
+
+
+class DeactivateLawyersResultSchema(Schema):
+    deactivated_count: int
+
+
+@router.post(
+    "/firm/deactivate-lawyers/",
+    auth=JWTAuth(),
+    response={200: DeactivateLawyersResultSchema, 403: ErrorSchema},
+)
+def deactivate_all_lawyers(request):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+    # Excludes the acting admin, mirroring update_lawyer's existing
+    # "You cannot deactivate your own account" self-deactivation guard -
+    # a bulk action shouldn't be able to lock its own caller out mid-action.
+    lawyers = LawyerProfile.objects.select_related("user").filter(
+        firm=firm, user__is_active=True
+    ).exclude(id=request.auth.id)
+
+    count = 0
+    for profile in lawyers:
+        profile.user.is_active = False
+        profile.user.save(update_fields=["is_active"])
+        count += 1
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="firm_all_lawyers_deactivated",
+        details=f"Deactivated {count} lawyer account(s) firm-wide (excluding self).",
+    )
+
+    return 200, {"deactivated_count": count}
+
+
+class DeactivateFirmSchema(Schema):
+    confirm_firm_name: str
+
+
+@router.post(
+    "/firm/deactivate/",
+    auth=JWTAuth(),
+    response={200: SuccessSchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def deactivate_firm(request, payload: DeactivateFirmSchema):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    firm = request.auth.firm
+    if payload.confirm_firm_name.strip() != firm.name:
+        return 400, {"error": "Firm name did not match. Nothing was changed."}
+
+    firm.is_active = False
+    firm.save(update_fields=["is_active"])
+
+    log_audit_event(
+        firm=firm,
+        actor=request.auth,
+        action="firm_deactivated",
+        details=(
+            "Firm deactivated via Settings > Danger Zone - every account at this firm, "
+            "including the acting admin, is now blocked from logging in. Contact platform "
+            "support to reactivate."
+        ),
+    )
+
+    return 200, {"success": True}

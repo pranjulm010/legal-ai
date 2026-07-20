@@ -3,7 +3,6 @@ import re
 import time
 from typing import Dict, List, Optional
 
-import groq
 from django.conf import settings
 
 from accounts.permissions import has_permission
@@ -23,8 +22,9 @@ from .groq_client import (
     _history_messages,
     _style_instructions,
     _wrap_untrusted_content,
-    get_groq_client,
 )
+from .llm_client import get_ai_client
+from .llm_errors import AIBadRequestError, AIRateLimitError
 from .rag_pipeline import _best_distance, build_context, build_web_context
 from .retriever import retrieve_context
 from .web_search import search_legal_web
@@ -53,13 +53,13 @@ def _dedupe_sources(sources) -> List[Dict]:
     return deduped
 
 
-def _decompose_question(question: str) -> List[str]:
+def _decompose_question(question: str, firm=None) -> List[str]:
     """
     Breaks a legal question into up to MAX_SUB_QUESTIONS focused
     sub-questions using the LLM. Falls back to the original question as a
     single-item list if decomposition fails or isn't useful.
     """
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     system_prompt = f"""
 You are a legal research planner. Break the user's question into at most
@@ -73,7 +73,7 @@ Return ONLY a JSON object of this exact form:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": question},
@@ -96,8 +96,8 @@ Return ONLY a JSON object of this exact form:
         return [question]
 
 
-def _synthesize_answer(question: str, step_results: List[Dict], mode: str = "mixed") -> str:
-    client = get_groq_client()
+def _synthesize_answer(question: str, step_results: List[Dict], mode: str = "mixed", firm=None) -> str:
+    client = get_ai_client(firm)
 
     context_blocks = []
 
@@ -140,7 +140,7 @@ Now synthesize one complete answer to the original question.
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=client.default_model,
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
@@ -158,6 +158,7 @@ def run_research_agent(
     firm_id: int,
     allow_web_search: bool = False,
     answer_mode: str = "mixed",
+    firm=None,
 ) -> Dict:
     """
     Multi-step research: decomposes the question, resolves each
@@ -174,7 +175,7 @@ def run_research_agent(
     that can also look up cases, compare documents, and generate drafts.
     """
     threshold = settings.RAG_RELEVANCE_DISTANCE_THRESHOLD
-    sub_questions = _decompose_question(question)
+    sub_questions = _decompose_question(question, firm=firm)
 
     step_results = []
     unresolved = []
@@ -262,7 +263,7 @@ def run_research_agent(
             "research_steps": [],
         }
 
-    answer = _synthesize_answer(question, step_results, mode=answer_mode)
+    answer = _synthesize_answer(question, step_results, mode=answer_mode, firm=firm)
     all_sources = _dedupe_sources(
         source for step in step_results for source in step["sources"]
     )
@@ -302,16 +303,18 @@ def run_research_agent(
 MAX_TOOL_ITERATIONS = 6
 MAX_TOOL_CALL_RETRIES = 2
 
-# settings.GROQ_MODEL (llama-3.3-70b-versatile) is used everywhere else in
-# this codebase and is left untouched - but it's empirically unreliable at
-# selecting among multiple simultaneous tools on Groq (reproduced: fails
+# The tool-calling model itself (client.tool_model, resolved per-firm by
+# get_ai_client() in llm_client.py) is a deliberate choice, not the same
+# model used for regular chat: the platform's default chat model
+# (settings.GROQ_MODEL, llama-3.3-70b-versatile) is empirically unreliable
+# at selecting among multiple simultaneous tools on Groq (reproduced: fails
 # ~100% of the time as soon as 2+ tools are offered, regardless of prompt
 # wording, emitting a malformed "<function=...>" string instead of a real
 # tool call). openai/gpt-oss-120b was tested against the same tool set and
-# question mix and was 100% reliable and fast (<2s), so only the
-# tool-calling agent below uses it - every other LLM call in this codebase
-# (RAG answers, classifiers, drafting, etc.) is unaffected.
-AGENT_TOOL_MODEL = "openai/gpt-oss-120b"
+# question mix and was 100% reliable and fast (<2s) - see
+# llm_client.AGENT_TOOL_MODEL, used for any Groq credential (platform or
+# BYOK). Every other LLM call in this codebase (RAG answers, classifiers,
+# drafting, etc.) is unaffected and keeps using client.default_model.
 
 # Maps a tool name to the research-step source_type/icon shown in the UI.
 _STEP_SOURCE_TYPE = {
@@ -339,9 +342,9 @@ _RETRY_AFTER_RE = re.compile(r"try again in ([0-9.]+)\s*s", re.I)
 
 
 def _parse_retry_after_seconds(error) -> float:
-    """How long Groq asked us to wait before retrying a 429. Prefer the
-    Retry-After header, fall back to the human-readable hint in the message
-    ("try again in 11.88s"), else a safe default."""
+    """How long the provider asked us to wait before retrying a 429. Prefer
+    the Retry-After header, fall back to the human-readable hint in the
+    message ("try again in 11.88s"), else a safe default."""
     try:
         headers = getattr(getattr(error, "response", None), "headers", None) or {}
         retry_after = headers.get("retry-after")
@@ -358,15 +361,17 @@ def _parse_retry_after_seconds(error) -> float:
 
 
 def _chat_completion_with_retry(client, **kwargs):
-    """client.chat.completions.create, but transparently waiting out a Groq
-    429 rate-limit (see MAX_RATE_LIMIT_RETRIES). Re-raises anything else, and
-    re-raises the 429 too once retries are exhausted so the caller can decide
-    how to report a genuine, sustained rate limit."""
+    """client.chat.completions.create, but transparently waiting out a
+    provider's 429 rate-limit (see MAX_RATE_LIMIT_RETRIES). Re-raises
+    anything else, and re-raises the 429 too once retries are exhausted so
+    the caller can decide how to report a genuine, sustained rate limit.
+    Works against any provider, not just Groq - get_ai_client() normalizes
+    every provider's rate-limit exception to AIRateLimitError."""
     attempts = 0
     while True:
         try:
             return client.chat.completions.create(**kwargs)
-        except groq.RateLimitError as error:
+        except AIRateLimitError as error:
             attempts += 1
             if attempts > MAX_RATE_LIMIT_RETRIES:
                 raise
@@ -397,7 +402,7 @@ def _is_weak_document_match(search_result: Dict) -> bool:
     return best_score > strong_cutoff
 
 
-def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = None, document_id: Optional[str] = None) -> List[Dict]:
+def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = None, document_id: Optional[str] = None, firm=None) -> List[Dict]:
     """
     The set of tools offered to the model is the actual safety boundary -
     not a text instruction the model might ignore. A tool that isn't in
@@ -432,13 +437,13 @@ def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = Non
         # agent runs, so the tool would be redundant there.
         if case_id or document_id:
             tools.append(GET_FIRM_STATS_TOOL)
-        if has_permission(role, "generate_draft"):
+        if has_permission(role, "generate_draft", firm=firm):
             tools.append(GENERATE_DRAFT_TOOL)
 
     return tools
 
 
-def _rewrite_question_with_context(question: str, history: Optional[List[Dict]]) -> str:
+def _rewrite_question_with_context(question: str, history: Optional[List[Dict]], firm=None) -> str:
     """
     Resolves pronouns/references ("that", "it", "the case", "the second
     one", "who handles it") against the conversation history into one
@@ -452,7 +457,7 @@ def _rewrite_question_with_context(question: str, history: Optional[List[Dict]])
     if not history:
         return question
 
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     history_text = "\n".join(
         f"User: {turn['question']}\nAssistant: {turn['answer']}" for turn in history[-6:]
@@ -507,7 +512,7 @@ Rewritten, self-contained question:
 
     try:
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=client.default_model,
             messages=[
                 {"role": "system", "content": system_prompt.strip()},
                 {"role": "user", "content": user_prompt.strip()},
@@ -521,7 +526,9 @@ Rewritten, self-contained question:
         return question
 
 
-def _reflection_check(question: str, answer: str, tool_context: str, history_text: str = "") -> Dict:
+def _reflection_check(
+    question: str, answer: str, tool_context: str, history_text: str = "", firm=None
+) -> Dict:
     """
     Lightweight self-check run once after the agent produces a final
     answer, asking the same four questions an experienced colleague would
@@ -538,11 +545,11 @@ def _reflection_check(question: str, answer: str, tool_context: str, history_tex
     standing instruction future agent runs are told about, see
     _record_lesson()/_fetch_recent_lessons() below.
     """
-    client = get_groq_client()
+    client = get_ai_client(firm)
 
     try:
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=client.default_model,
             messages=[
                 {
                     "role": "system",
@@ -710,8 +717,8 @@ def run_agent(
     needs_web_confirmation flow used everywhere else in this platform,
     rather than silently searching or silently refusing.
     """
-    client = get_groq_client()
-    tools = _build_tools(role, allow_web_search, case_id, document_id)
+    client = get_ai_client(firm)
+    tools = _build_tools(role, allow_web_search, case_id, document_id, firm=firm)
 
     system_prompt = f"""
 You are an Indian legal AI assistant with access to tools. Your highest
@@ -915,7 +922,7 @@ Always end your final answer with:
     # sent to the tools verbatim. The ORIGINAL question is still what's
     # shown to the user and used for the final reflection check below -
     # only the internal working question changes.
-    effective_question = _rewrite_question_with_context(question, history)
+    effective_question = _rewrite_question_with_context(question, history, firm=firm)
     if effective_question != question:
         research_steps.append(
             {"sub_question": f"Understood as: {effective_question}", "source_type": "context", "resolved": True}
@@ -990,14 +997,14 @@ Always end your final answer with:
         try:
             response = _chat_completion_with_retry(
                 client,
-                model=AGENT_TOOL_MODEL,
+                model=client.tool_model,
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
                 max_tokens=1500,
             )
-        except groq.RateLimitError:
+        except AIRateLimitError:
             # Still rate-limited after waiting out the suggested delay and
             # retrying - report it as a plain, friendly "busy, try again"
             # message rather than a 500, so the user knows to just resend.
@@ -1010,7 +1017,7 @@ Always end your final answer with:
                 "needs_web_confirmation": False,
                 "research_steps": research_steps,
             }
-        except groq.BadRequestError as error:
+        except AIBadRequestError as error:
             # The model occasionally emits a malformed tool call (Groq
             # rejects it with code "tool_use_failed" before it ever reaches
             # our own dispatch code) - rather than failing the whole
@@ -1096,7 +1103,7 @@ Always end your final answer with:
                 f"User: {turn['question']}\nAssistant: {turn['answer']}" for turn in (history or [])[-6:]
             )
             reflection = (
-                _reflection_check(question, final_answer, tool_context, history_text)
+                _reflection_check(question, final_answer, tool_context, history_text, firm=firm)
                 if not reflected and final_answer
                 else {"complete": True}
             )
