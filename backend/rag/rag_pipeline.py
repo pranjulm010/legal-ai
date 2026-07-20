@@ -9,6 +9,7 @@ from .vector_store import store_document_chunks
 from .retriever import retrieve_context, retrieve_firm_context
 from .firm_stats import try_answer_firm_stats
 from .groq_client import (
+    classify_law_related,
     generate_knowledge_based_answer,
     generate_legal_answer,
     generate_web_grounded_answer,
@@ -276,37 +277,120 @@ def _llm_knowledge_result(question, answer_mode, history, disclaimer: str) -> Di
     }
 
 
-# Shown when local search (uploaded document and/or firm database) comes up
-# empty. The platform intentionally does NOT offer to run a web search on the
-# user's behalf here - it tells them nothing is on file and leaves searching
-# the web up to them. Kept as a single constant so the deterministic pipeline
-# and the tool-calling agent stay in sync.
+# Fallback only: shown for a genuine LEGAL question we can't answer from the
+# firm's records AND where generating a general-knowledge answer itself failed
+# (e.g. the LLM call errored). The normal path for a legal question now
+# ANSWERS it from general legal knowledge - see out_of_scope_result.
 NOT_FOUND_LOCALLY_MESSAGE = (
-    "Sorry, I don't have anything about this in the firm's records, so I can't "
-    "answer it here. You're welcome to try a web search to look into it yourself."
+    "I couldn't find anything about this in the firm's records. "
+    "To know more, you could try a web search on it yourself."
+)
+
+# Shown when the question isn't a legal matter at all (sports, coding, general
+# trivia, etc.). This assistant only handles legal questions and the firm's
+# own records, so a non-legal question is told plainly it's out of scope
+# rather than being answered.
+NOT_LAW_RELATED_MESSAGE = (
+    "This doesn't look like a legal question to me, so I can't help with it "
+    "here. I can only assist with legal matters and the firm's own records."
+)
+
+# Appended after a general-knowledge legal answer to point the user at a web
+# search for anything more current or specific, without running one for them.
+WEB_SEARCH_NUDGE = (
+    "For the latest or more specific details on this, you can also try a web search."
 )
 
 
-def _ask_web_consent(chunks: List[Dict], best_distance: float) -> Dict:
+def out_of_scope_result(
+    question: str,
+    answer_mode: str = "mixed",
+    history: Optional[List[Dict]] = None,
+) -> Dict:
     """
-    Standard "nothing found locally" response - used everywhere local search
-    (uploaded document and/or firm database) comes up empty and the question
-    doesn't already contain an explicit web-search request, for both General
-    Public and Lawyer roles. Reuses _nearest_document_note's near-miss
-    suggestions when there's something worth mentioning; otherwise returns the
-    plain not-found message. Does not offer to search the web on the user's
-    behalf - see NOT_FOUND_LOCALLY_MESSAGE.
+    Build the reply for a question local records can't answer.
+
+    - A genuine LEGAL question is ANSWERED from the model's own general legal
+      knowledge (generate_knowledge_based_answer already discloses it's general
+      info, not the firm's records), followed by a short nudge that a web
+      search can surface more current detail.
+    - A question that isn't law-related at all is turned away plainly
+      (NOT_LAW_RELATED_MESSAGE).
+
+    classify_law_related fails open (returns True on error), so an
+    unclassifiable question still gets a helpful legal answer rather than a
+    refusal. If answer generation itself fails, falls back to the short
+    web-search nudge instead of surfacing an error.
     """
-    note = _nearest_document_note(chunks, best_distance)
-    if not note:
-        note = NOT_FOUND_LOCALLY_MESSAGE
+    if not classify_law_related(question):
+        return {
+            "answer": NOT_LAW_RELATED_MESSAGE,
+            "sources": [],
+            "needs_web_confirmation": False,
+            "route": None,
+            "confidence_level": None,
+        }
+
+    try:
+        answer = generate_knowledge_based_answer(
+            question=question, mode=answer_mode, history=history
+        )
+        answer = f"{answer}\n\n{WEB_SEARCH_NUDGE}"
+        route = ROUTE_LLM_KNOWLEDGE
+    except Exception:
+        answer = NOT_FOUND_LOCALLY_MESSAGE
+        route = None
+
     return {
-        "answer": note,
+        "answer": answer,
         "sources": [],
         "needs_web_confirmation": False,
-        "route": None,
-        "confidence_level": None,
+        "route": route,
+        "confidence_level": CONFIDENCE_BY_ROUTE[route] if route else None,
     }
+
+
+def out_of_scope_answer(
+    question: str,
+    answer_mode: str = "mixed",
+    history: Optional[List[Dict]] = None,
+) -> str:
+    """Just the answer TEXT for an out-of-scope question - see
+    out_of_scope_result. Used by callers (e.g. the research agent) that build
+    their own result dict and only need the message body."""
+    return out_of_scope_result(question, answer_mode, history)["answer"]
+
+
+def _ask_web_consent(
+    question: str,
+    chunks: List[Dict],
+    best_distance: float,
+    answer_mode: str = "mixed",
+    history: Optional[List[Dict]] = None,
+) -> Dict:
+    """
+    "Nothing found locally" response - used everywhere local search (uploaded
+    document and/or firm database) comes up empty and the question doesn't
+    already contain an explicit web-search request, for both General Public and
+    Lawyer roles.
+
+    If there's a near-miss firm document worth pointing at, _nearest_document_note
+    suggests it (that's firm-specific and beats a generic answer). Otherwise the
+    question is out of scope for the firm's records, so out_of_scope_result
+    handles it: a genuine legal question is answered from general legal
+    knowledge, a non-legal one is turned away. Still does not run a web search
+    on the user's behalf.
+    """
+    note = _nearest_document_note(chunks, best_distance)
+    if note:
+        return {
+            "answer": note,
+            "sources": [],
+            "needs_web_confirmation": False,
+            "route": None,
+            "confidence_level": None,
+        }
+    return out_of_scope_result(question, answer_mode, history)
 
 
 def answer_question(
@@ -395,7 +479,7 @@ def answer_question(
                 )
             return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_web_results(region))
 
-        return _ask_web_consent(chunks, best_distance)
+        return _ask_web_consent(question, chunks, best_distance, answer_mode, history)
 
     # Lawyer: before asking to search the web, check whether the answer is
     # sitting in a different document the firm already has.
@@ -424,7 +508,7 @@ def answer_question(
     # Nothing in the document or the firm's database. An explicit request
     # in the question itself counts as consent; otherwise ask first.
     if not (explicit_web or allow_web_search):
-        return _ask_web_consent(firm_chunks, firm_best_distance)
+        return _ask_web_consent(question, firm_chunks, firm_best_distance, answer_mode, history)
 
     web_results = search_legal_web(question, region=region)
 
@@ -654,7 +738,7 @@ def answer_general_question(
                 )
             return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_web_results(region))
 
-        return _ask_web_consent([], float("inf"))
+        return _ask_web_consent(question, [], float("inf"), answer_mode, history)
 
     chunks = retrieve_firm_context(question=question, firm_id=firm.id, top_k=5)
 
@@ -695,7 +779,7 @@ def answer_general_question(
                 )
             return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_web_results(region))
 
-        return _ask_web_consent(chunks, best_distance)
+        return _ask_web_consent(question, chunks, best_distance, answer_mode, history)
 
     # Lawyer, no document selected: an explicit request in the question
     # counts as consent already given; otherwise ask before searching the
@@ -709,4 +793,4 @@ def answer_general_question(
             )
         return _llm_knowledge_result(question, answer_mode, history, disclaimer_no_firm_or_web(region))
 
-    return _ask_web_consent(chunks, best_distance)
+    return _ask_web_consent(question, chunks, best_distance, answer_mode, history)

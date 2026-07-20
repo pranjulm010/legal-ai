@@ -426,6 +426,64 @@ def classify_web_search_intent(question: str) -> bool:
     return bool(isinstance(data, dict) and data.get("wants_web_search"))
 
 
+_LAW_RELATED_CLASSIFIER_PROMPT = """
+You classify whether a user's message is a LEGAL / law-related question, for
+a law firm's AI assistant. This is only asked when the assistant has already
+found nothing about it in the firm's own records, so we need to decide how to
+turn the user away: point them to a web search (if it's a genuine legal
+question we simply don't have on file) or tell them it's outside this
+assistant's area (if it isn't a legal question at all).
+
+A LEGAL question is anything about the law, legal rights, procedures, courts,
+statutes/sections, case law, contracts, disputes, crimes, penalties, filing
+or defending a matter, or general legal information/advice - in ANY country,
+ANY language, and ANY phrasing. Examples that ARE legal: "latest Supreme
+Court guidelines on anticipatory bail", "what is the punishment for theft",
+"how do I file for divorce", "explain force majeure clauses", "is a verbal
+agreement enforceable", "what are my rights if I'm arrested".
+
+NOT legal: sports, cooking, coding, math, general trivia, entertainment,
+personal chit-chat, current events with no legal angle. Examples that are NOT
+legal: "who won the cricket match", "write me a python script", "what's the
+weather", "suggest a good movie", "how do I bake bread".
+
+Respond with ONLY a JSON object, no other text:
+{"is_law_related": boolean}
+"""
+
+
+def classify_law_related(question: str) -> bool:
+    """
+    Decide whether an out-of-scope question is still a genuine LEGAL question
+    (so the assistant nudges the user toward a web search) or not law-related
+    at all (so it says plainly the topic is outside its scope). Only called on
+    the not-found-locally path, so it adds no latency to answered questions.
+
+    Fails OPEN (True) on any error: wrongly telling a real legal question "this
+    isn't legal" is the worse failure, so an unclassifiable question defaults
+    to being treated as legal and gets the web-search suggestion.
+    """
+    try:
+        client = get_groq_client()
+        response = client.chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": _LAW_RELATED_CLASSIFIER_PROMPT.strip()},
+                {"role": "user", "content": question},
+            ],
+            temperature=0,
+            max_tokens=50,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content)
+    except Exception:
+        return True
+
+    if not isinstance(data, dict) or "is_law_related" not in data:
+        return True
+    return bool(data.get("is_law_related"))
+
+
 # answer_mode -> style instructions injected into the system prompt. Keeps
 # the shared anti-hallucination/disclaimer rules identical across modes and
 # only varies HOW the answer is written.

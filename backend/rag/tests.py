@@ -51,17 +51,43 @@ class DocumentScopedRoutingTests(TestCase):
         self.assertFalse(result["needs_web_confirmation"])
         mock_generate.assert_called_once()
 
+    @patch("rag.rag_pipeline._explicit_web_intent", return_value=False)
+    @patch("rag.rag_pipeline.generate_knowledge_based_answer", return_value="General legal guidance.")
+    @patch("rag.rag_pipeline.classify_law_related", return_value=True)
     @patch("rag.rag_pipeline.retrieve_context", return_value=[])
-    def test_public_no_document_match_no_explicit_web_asks_consent(self, mock_retrieve):
+    def test_public_no_document_match_legal_question_answered_from_general_knowledge(
+        self, mock_retrieve, mock_classify, mock_generate, mock_explicit
+    ):
+        # Nothing in the uploaded document, but it's a genuine legal question,
+        # so we now answer from general legal knowledge instead of refusing.
         result = answer_question(
-            question="what is case1",
+            question="what are my rights if I'm arrested",
             document_id="doc-1",
             firm_id=1,
             role="public",
         )
 
-        self.assertTrue(result["needs_web_confirmation"])
+        self.assertEqual(result["route"], "llm_knowledge")
+        self.assertFalse(result["needs_web_confirmation"])
+        mock_generate.assert_called_once()
+
+    @patch("rag.rag_pipeline._explicit_web_intent", return_value=False)
+    @patch("rag.rag_pipeline.classify_law_related", return_value=False)
+    @patch("rag.rag_pipeline.retrieve_context", return_value=[])
+    def test_public_no_document_match_non_legal_question_is_refused(
+        self, mock_retrieve, mock_classify, mock_explicit
+    ):
+        # Not a legal question at all: turned away plainly, never answered.
+        result = answer_question(
+            question="who won the cricket match yesterday",
+            document_id="doc-1",
+            firm_id=1,
+            role="public",
+        )
+
         self.assertIsNone(result["route"])
+        self.assertFalse(result["needs_web_confirmation"])
+        self.assertIn("legal question", result["answer"].lower())
 
     @patch("rag.rag_pipeline.generate_legal_answer", return_value="Answer from firm database.")
     @patch("rag.rag_pipeline.retrieve_firm_context")
@@ -79,17 +105,25 @@ class DocumentScopedRoutingTests(TestCase):
         self.assertEqual(result["route"], "firm_database")
         self.assertFalse(result["needs_web_confirmation"])
 
+    @patch("rag.rag_pipeline._explicit_web_intent", return_value=False)
+    @patch("rag.rag_pipeline.generate_knowledge_based_answer", return_value="General legal guidance.")
+    @patch("rag.rag_pipeline.classify_law_related", return_value=True)
     @patch("rag.rag_pipeline.retrieve_firm_context", return_value=[])
     @patch("rag.rag_pipeline.retrieve_context", return_value=[])
-    def test_lawyer_document_and_firm_db_both_empty_asks_consent(self, mock_doc_retrieve, mock_firm_retrieve):
+    def test_lawyer_document_and_firm_db_both_empty_answers_legal_from_general_knowledge(
+        self, mock_doc_retrieve, mock_firm_retrieve, mock_classify, mock_generate, mock_explicit
+    ):
+        # Neither the selected document nor the firm database has it, but it's
+        # a legal question, so answer from general legal knowledge.
         result = answer_question(
-            question="what is case1",
+            question="what are my rights if I'm arrested",
             document_id="doc-1",
             firm_id=1,
             role="admin",
         )
 
-        self.assertTrue(result["needs_web_confirmation"])
+        self.assertEqual(result["route"], "llm_knowledge")
+        self.assertFalse(result["needs_web_confirmation"])
 
     @patch("rag.rag_pipeline.generate_web_grounded_answer", return_value="Answer from the web.")
     @patch("rag.rag_pipeline.search_legal_web")
@@ -130,20 +164,28 @@ class GeneralQuestionRoutingTests(SimpleTestCase):
         self.assertEqual(result["confidence_level"], "High")
         mock_stats.assert_called_once()
 
+    @patch("rag.rag_pipeline._explicit_web_intent", return_value=False)
+    @patch("rag.rag_pipeline.generate_knowledge_based_answer", return_value="General legal guidance.")
+    @patch("rag.rag_pipeline.classify_law_related", return_value=True)
     @patch("rag.rag_pipeline.try_answer_firm_stats", return_value=None)
     @patch("rag.rag_pipeline._match_document_by_name", return_value=None)
     @patch("rag.rag_pipeline.retrieve_firm_context", return_value=[])
-    def test_no_match_anywhere_asks_consent_not_llm_directly(
-        self, mock_retrieve, mock_match_name, mock_stats
+    def test_no_match_anywhere_answers_legal_from_general_knowledge_not_web(
+        self, mock_retrieve, mock_match_name, mock_stats, mock_classify, mock_generate, mock_explicit
     ):
+        # No firm stats, no named document, nothing in the firm's documents -
+        # but a legal question, so answer from general legal knowledge without
+        # silently running a web search.
         firm = type("Firm", (), {"id": 1})()
 
         with patch("api.models.UploadedDocument.objects") as mock_docs:
             mock_docs.filter.return_value.exists.return_value = True  # firm has documents
             result = answer_general_question(
-                question="what is case1",
+                question="what are my rights if I'm arrested",
                 firm=firm,
                 role="admin",
             )
 
-        self.assertTrue(result["needs_web_confirmation"])
+        self.assertEqual(result["route"], "llm_knowledge")
+        self.assertFalse(result["needs_web_confirmation"])
+        mock_generate.assert_called_once()

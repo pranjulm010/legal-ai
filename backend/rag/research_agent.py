@@ -26,10 +26,10 @@ from .groq_client import (
     get_groq_client,
 )
 from .rag_pipeline import (
-    NOT_FOUND_LOCALLY_MESSAGE,
     _best_distance,
     build_context,
     build_web_context,
+    out_of_scope_answer,
 )
 from .retriever import retrieve_context
 from .web_search import search_legal_web
@@ -223,7 +223,7 @@ def run_research_agent(
         ]
 
         return {
-            "answer": NOT_FOUND_LOCALLY_MESSAGE,
+            "answer": out_of_scope_answer(question, answer_mode),
             "sources": [],
             "needs_web_confirmation": False,
             "research_steps": resolved_steps + pending_steps,
@@ -732,11 +732,19 @@ NO general knowledge to draw on. If a question is not about this firm's
 data or an uploaded/attached document - for example general legal theory,
 world knowledge, current events, public figures, sports, trivia, coding,
 or any topic your tools return nothing relevant for - you MUST NOT answer
-it from your own knowledge. Instead respond with exactly this and nothing
-else:
-"Sorry, I don't have anything about this in the firm's records, so I can't
-answer it here. You're welcome to try a web search to look into it
-yourself."
+it from your own knowledge. Instead respond with exactly one of these two
+lines and nothing else, choosing based on whether the question is a genuine
+LEGAL question:
+- If it IS a legal/law-related question (about the law, legal rights,
+  procedures, courts, statutes, cases, contracts, disputes, crimes,
+  penalties, etc.) that simply isn't in the firm's records, respond with
+  exactly:
+  "I couldn't find anything about this in the firm's records. To know more,
+  you could try a web search on it yourself."
+- If it is NOT a legal question at all (sports, coding, general trivia,
+  entertainment, chit-chat, or any non-legal topic), respond with exactly:
+  "This doesn't look like a legal question to me, so I can't help with it
+  here. I can only assist with legal matters and the firm's own records."
 
 Use tools as needed to answer thoroughly and accurately from the firm's
 data: you are not limited to only answering from document text, you can
@@ -1114,7 +1122,7 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
             )
             if not grounded and not allow_web_search and not document_id and not case_id:
                 return {
-                    "answer": NOT_FOUND_LOCALLY_MESSAGE,
+                    "answer": out_of_scope_answer(effective_question, answer_mode, history),
                     "sources": sources,
                     "needs_web_confirmation": False,
                     "research_steps": research_steps,
@@ -1200,7 +1208,7 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
 
             if name == "request_web_search":
                 return {
-                    "answer": NOT_FOUND_LOCALLY_MESSAGE,
+                    "answer": out_of_scope_answer(effective_question, answer_mode, history),
                     "sources": [],
                     "needs_web_confirmation": False,
                     "research_steps": research_steps
