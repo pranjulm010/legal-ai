@@ -277,13 +277,14 @@ def _llm_knowledge_result(question, answer_mode, history, disclaimer: str) -> Di
     }
 
 
-# Fallback only: shown for a genuine LEGAL question we can't answer from the
-# firm's records AND where generating a general-knowledge answer itself failed
-# (e.g. the LLM call errored). The normal path for a legal question now
-# ANSWERS it from general legal knowledge - see out_of_scope_result.
-NOT_FOUND_LOCALLY_MESSAGE = (
-    "I couldn't find anything about this in the firm's records. "
-    "To know more, you could try a web search on it yourself."
+# Shown only when we HAD a legal question to answer but the AI service call
+# itself failed (e.g. the model provider rate-limited us or was temporarily
+# unavailable). Deliberately distinct from a "nothing found in your records"
+# message: a transient service failure must never be misreported to the user
+# as a data/records problem - that sends them looking in the wrong place.
+SERVICE_UNAVAILABLE_MESSAGE = (
+    "I couldn't generate an answer just now - the AI service is temporarily "
+    "busy or unavailable. Please try again in a little while."
 )
 
 # Shown when the question isn't a legal matter at all (sports, coding, general
@@ -319,8 +320,9 @@ def out_of_scope_result(
 
     classify_law_related fails open (returns True on error), so an
     unclassifiable question still gets a helpful legal answer rather than a
-    refusal. If answer generation itself fails, falls back to the short
-    web-search nudge instead of surfacing an error.
+    refusal. If answer generation itself fails (e.g. the model provider is
+    rate-limited or down), the user is told the service is temporarily
+    unavailable - never that "nothing was found", which would be misleading.
     """
     if not classify_law_related(question):
         return {
@@ -337,8 +339,13 @@ def out_of_scope_result(
         )
         answer = f"{answer}\n\n{WEB_SEARCH_NUDGE}"
         route = ROUTE_LLM_KNOWLEDGE
-    except Exception:
-        answer = NOT_FOUND_LOCALLY_MESSAGE
+    except Exception as error:
+        # A service/rate-limit failure is NOT the same as "not in the records".
+        # Log the real cause for debugging (it was previously swallowed
+        # silently) and tell the user the truth: the service is temporarily
+        # unavailable, so they retry rather than assume their data is missing.
+        print(f"out_of_scope_result: general-knowledge generation failed: {error}")
+        answer = SERVICE_UNAVAILABLE_MESSAGE
         route = None
 
     return {
@@ -699,7 +706,12 @@ def answer_general_question(
     """
     is_public = role == "public"
 
-    stats_answer = try_answer_firm_stats(question, firm)
+    # try_answer_firm_stats returns a 3-tuple (answer, resolved_case_id,
+    # is_cases_query); only the answer text matters here (case-id tracking is
+    # the view's job). Unpacking is required - the tuple itself is never None,
+    # so testing the raw return would always short-circuit with a tuple as the
+    # "answer".
+    stats_answer, _resolved_case_id, _is_cases_query = try_answer_firm_stats(question, firm)
 
     if stats_answer is not None:
         return {

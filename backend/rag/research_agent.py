@@ -443,7 +443,11 @@ def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = Non
     return tools
 
 
-def _rewrite_question_with_context(question: str, history: Optional[List[Dict]]) -> str:
+def _rewrite_question_with_context(
+    question: str,
+    history: Optional[List[Dict]],
+    attached_document_name: Optional[str] = None,
+) -> str:
     """
     Resolves pronouns/references ("that", "it", "the case", "the second
     one", "who handles it") against the conversation history into one
@@ -453,8 +457,26 @@ def _rewrite_question_with_context(question: str, history: Optional[List[Dict]])
     language. No-op (returns the question unchanged) when there's no prior
     history, or on any failure - conversational memory should never break
     a question that was already perfectly answerable on its own.
+
+    ``attached_document_name`` is the document currently attached to the
+    conversation, if any. When one is attached, references like "this",
+    "this case", "this document", or "it" mean THAT document - not whatever
+    was discussed earlier - so the history-based rewrite is skipped entirely
+    (see below): it would otherwise bind "what case is this?" for a
+    freshly-uploaded breach notice to a mobile-theft case from an earlier
+    turn, and the tool model is not reliable enough to be told in-prompt to
+    resolve to the document instead of history.
     """
     if not history:
+        return question
+
+    # A document is attached: the main agent prompt's document block already
+    # binds "this"/"this case"/"it" to THAT document, and the deterministic
+    # first search runs against it by id. Running the history rewrite here can
+    # only corrupt a document reference into a stale earlier topic (e.g.
+    # "what case is this?" -> "what case is my phone theft?"), which then
+    # defeats the document block. Skip it and let the question stand.
+    if attached_document_name:
         return question
 
     client = get_groq_client()
@@ -898,23 +920,33 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
     # monthly rent and the notice period for terminating this agreement?"
     # asked against an attached rental-agreement PDF made the model treat
     # "this agreement" as a CASE reference and reply "which case do you
-    # mean?" instead of just answering from the document it was handed. This
-    # block tells it plainly that an attached document is the subject, so
-    # "this document/agreement/contract/it" means that file, not a case.
+    # mean?"; separately, "what case is this?" for a freshly-attached breach
+    # notice was answered from a mobile-theft case discussed earlier. This
+    # block tells it that the attached document is the subject and to resolve
+    # references to it by the user's INTENT - not by matching a fixed list of
+    # words - so a question about the file is answered from the file rather
+    # than chased into a case or an earlier topic.
     elif document_id:
         system_prompt += (
-            "\n\nThe user has explicitly attached ONE specific document to this "
+            "\n\nThe user has attached ONE specific document to this "
             "conversation, and an automatic search of THAT document has already "
-            "run (see the system note with its result below). Every reference "
-            "the user makes to \"this document\", \"this agreement\", \"this "
-            "contract\", \"this file\", \"the document\", \"it\", or similar "
-            "refers to that attached document - NOT to a case. Answer the "
-            "question directly from the attached document's own content. Do NOT "
-            "ask the user which case they mean, and do NOT call get_case_info "
-            "for a question about the attached document's content - there is no "
-            "case involved here. Only if the attached document genuinely does "
-            "not contain the answer should you say so plainly (or offer a web "
-            "search); never respond by asking for a case name or ID.\n"
+            "run (see the system note with its result below). For this "
+            "conversation, the attached document IS the subject. Reason about "
+            "the user's INTENT, not their exact words or language: any question "
+            "asking what this is, which case or matter it concerns, who the "
+            "parties are, what it says or requires, or otherwise pointing at it "
+            "is a question about the ATTACHED DOCUMENT - whatever phrasing or "
+            "language the user uses. (\"this\", \"this document\", \"this case\", "
+            "\"it\", \"what case is this?\" are only illustrations, not an "
+            "exhaustive list of words to match on.) Answer such a question from "
+            "the document's own content - its subject, parties, obligations, and "
+            "the matter it concerns. Do NOT reach back to a case, document, or "
+            "topic discussed earlier in the conversation, and do NOT call "
+            "get_case_info, unless the user CLEARLY and explicitly names a "
+            "different, earlier matter they want instead of this document. Never "
+            "ask the user which case they mean. Only if the attached document "
+            "genuinely does not contain the answer should you say so plainly (or "
+            "offer a web search).\n"
             "\nIf the user asks whether the firm has handled or currently "
             "handles a case of THIS type, a SIMILAR case, or SUCH a case "
             "(relative to the attached document), do this: (1) use the "
@@ -949,7 +981,19 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
     # sent to the tools verbatim. The ORIGINAL question is still what's
     # shown to the user and used for the final reflection check below -
     # only the internal working question changes.
-    effective_question = _rewrite_question_with_context(question, history)
+    # The rewrite must know which document is attached, so a reference like
+    # "this"/"this case" in a follow-up resolves to the attached document
+    # rather than to a stale case/topic from earlier in the conversation.
+    attached_document_name = None
+    if document_id:
+        from api.models import UploadedDocument
+
+        attached_document_name = (
+            UploadedDocument.objects.filter(document_id=document_id)
+            .values_list("original_name", flat=True)
+            .first()
+        )
+    effective_question = _rewrite_question_with_context(question, history, attached_document_name)
     if effective_question != question:
         research_steps.append(
             {"sub_question": f"Understood as: {effective_question}", "source_type": "context", "resolved": True}
