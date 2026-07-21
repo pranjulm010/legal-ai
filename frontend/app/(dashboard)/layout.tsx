@@ -95,8 +95,23 @@ export default function DashboardLayout({
             logout();
             router.push("/login");
           }}
-          className="w-full rounded-lg border border-[#c9a96e]/15 py-2 text-left text-xs text-[#8a7c68] hover:text-[#c9a96e]"
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#c9a96e]/15 py-2 text-sm font-medium text-[#8a7c68] transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300"
         >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+            aria-hidden
+          >
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
           Log out
         </button>
       </div>

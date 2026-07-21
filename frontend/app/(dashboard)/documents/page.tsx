@@ -35,6 +35,8 @@ type DocResult =
   | { documentId: string; action: "entities"; data: EntityExtraction }
   | { documentId: string; action: "compliance"; data: ComplianceFinding[] };
 
+const PAGE_SIZE = 10;
+
 function formatDate(value: string) {
   return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
@@ -58,6 +60,7 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [tagFilter, setTagFilter] = useState("");
+  const [page, setPage] = useState(1);
 
   const [editingTagsId, setEditingTagsId] = useState<string | null>(null);
   const [tagsDraft, setTagsDraft] = useState("");
@@ -71,6 +74,7 @@ export default function DocumentsPage() {
 
   const load = (tag?: string) => {
     setLoading(true);
+    setPage(1);
     listDocuments(tag ? { tag } : undefined)
       .then(setDocuments)
       .finally(() => setLoading(false));
@@ -149,6 +153,13 @@ export default function DocumentsPage() {
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(documents.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedDocuments = documents.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -196,7 +207,7 @@ export default function DocumentsPage() {
         <p className="text-sm text-[#5a4f3f]">No documents found.</p>
       ) : (
         <ul className="flex flex-col gap-3">
-          {documents.map((doc) => (
+          {pagedDocuments.map((doc) => (
             <li
               key={doc.document_id}
               className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-4"
@@ -343,6 +354,34 @@ export default function DocumentsPage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {!loading && documents.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-[#8a7c68]">
+            Showing {(currentPage - 1) * PAGE_SIZE + 1}–
+            {Math.min(currentPage * PAGE_SIZE, documents.length)} of {documents.length}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-[#8a7c68]">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

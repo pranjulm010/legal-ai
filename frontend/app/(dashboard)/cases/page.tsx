@@ -8,6 +8,11 @@ import { createCase, listCases, type CaseListItem } from "@/lib/api";
 
 const CASE_TYPES = ["civil", "criminal", "corporate", "family", "property", "other"];
 const STATUSES = ["open", "in_progress", "on_hold", "closed"];
+const PAGE_SIZE = 10;
+
+function formatLabel(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
 
 export default function CasesPage() {
   const { user } = useAuth();
@@ -22,9 +27,11 @@ export default function CasesPage() {
   const [clientName, setClientName] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [page, setPage] = useState(1);
 
   const load = (status?: string) => {
     setLoading(true);
+    setPage(1);
     listCases(status ? { status } : undefined)
       .then(setCases)
       .finally(() => setLoading(false));
@@ -50,6 +57,10 @@ export default function CasesPage() {
       setSubmitting(false);
     }
   };
+
+  const totalPages = Math.max(1, Math.ceil(cases.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedCases = cases.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   return (
     <div className="flex flex-col gap-6">
@@ -89,7 +100,7 @@ export default function CasesPage() {
             >
               {CASE_TYPES.map((type) => (
                 <option key={type} value={type}>
-                  {type}
+                  {formatLabel(type)}
                 </option>
               ))}
             </select>
@@ -135,7 +146,7 @@ export default function CasesPage() {
                 : "text-[#8a7c68] hover:text-[#c9a96e]"
             }`}
           >
-            {status}
+            {formatLabel(status)}
           </button>
         ))}
       </div>
@@ -146,7 +157,7 @@ export default function CasesPage() {
         <p className="text-[#5a4f3f]">No cases found.</p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {cases.map((c) => (
+          {pagedCases.map((c) => (
             <li key={c.id}>
               <Link
                 href={`/cases/${c.id}`}
@@ -155,11 +166,11 @@ export default function CasesPage() {
                 <div>
                   <p className="font-medium text-[#e0d2ba]">{c.title}</p>
                   <p className="text-xs text-[#8a7c68]">
-                    {c.case_type} · {c.client_name || "No client name"}
+                    {formatLabel(c.case_type)} · {c.client_name || "No client name"}
                   </p>
                 </div>
                 <div className="text-right text-xs text-[#8a7c68]">
-                  <p>{c.status}</p>
+                  <p>{formatLabel(c.status)}</p>
                   <p>
                     {c.open_reminders_count} open reminder
                     {c.open_reminders_count === 1 ? "" : "s"}
@@ -169,6 +180,34 @@ export default function CasesPage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {!loading && cases.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-[#8a7c68]">
+            Showing {(currentPage - 1) * PAGE_SIZE + 1}–
+            {Math.min(currentPage * PAGE_SIZE, cases.length)} of {cases.length}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-[#8a7c68]">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

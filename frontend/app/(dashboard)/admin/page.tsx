@@ -11,6 +11,23 @@ function formatDate(value: string) {
   });
 }
 
+type ActivityTone = "created" | "deleted" | "auth" | "neutral";
+
+function toneForAction(action: string): ActivityTone {
+  if (/(deleted|removed|disconnected|revoked|declined)/.test(action)) return "deleted";
+  if (/(created|added|invited|connected|activated|saved|generated|uploaded)/.test(action))
+    return "created";
+  if (/(logged_in|logged_out|login|logout|signed_in|signed_out)/.test(action)) return "auth";
+  return "neutral";
+}
+
+const TONE_DOT: Record<ActivityTone, string> = {
+  created: "bg-emerald-400",
+  deleted: "bg-red-400",
+  auth: "bg-blue-400",
+  neutral: "bg-[#c9a96e]",
+};
+
 function StatCard({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
@@ -69,20 +86,51 @@ export default function AdminDashboardPage() {
         <StatCard label="Drafts generated" value={data.drafts_generated} />
       </div>
 
-      <section className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
-        <h2 className="mb-3 font-semibold text-[#f0e6cc]">Recent activity (audit log)</h2>
+      <section className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08]">
+        <div className="flex items-center justify-between border-b border-[#c9a96e]/10 px-5 py-4">
+          <h2 className="font-semibold text-[#f0e6cc]">Recent activity</h2>
+          <span className="rounded-full border border-[#c9a96e]/15 px-2.5 py-0.5 text-xs text-[#8a7c68]">
+            Audit log
+          </span>
+        </div>
 
         {data.recent_activity.length === 0 ? (
-          <p className="text-sm text-[#5a4f3f]">No activity recorded yet.</p>
+          <p className="px-5 py-8 text-center text-sm text-[#5a4f3f]">
+            No activity recorded yet.
+          </p>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {data.recent_activity.map((log) => (
-              <li key={log.id} className="text-xs text-[#8a7c68]">
-                {formatDate(log.created_at)} — <span className="text-[#c9a96e]">{log.actor_name || "System"}</span>{" "}
-                {log.action.replace(/_/g, " ")}
-                {log.details && `: ${log.details}`}
-              </li>
-            ))}
+          <ul className="divide-y divide-[#c9a96e]/8">
+            {data.recent_activity.map((log) => {
+              const tone = toneForAction(log.action);
+              return (
+                <li
+                  key={log.id}
+                  className="flex items-start gap-3 px-5 py-3 transition hover:bg-[#c9a96e]/5"
+                >
+                  <span
+                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${TONE_DOT[tone]}`}
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-[#cfc0a4]">
+                      <span className="font-medium text-[#f0e6cc]">
+                        {log.actor_name || "System"}
+                      </span>{" "}
+                      <span className="text-[#8a7c68]">{log.action.replace(/_/g, " ")}</span>
+                      {log.details && (
+                        <>
+                          {" "}
+                          <span className="text-[#e0d2ba]">{log.details}</span>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                  <time className="shrink-0 whitespace-nowrap pt-0.5 text-xs tabular-nums text-[#5a4f3f]">
+                    {formatDate(log.created_at)}
+                  </time>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

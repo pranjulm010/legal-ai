@@ -6,6 +6,8 @@ import { useAuth } from "@/lib/AuthContext";
 import { hasPermission } from "@/lib/permissions";
 import { deleteChatEntry, searchChatHistory, type ChatSearchResult } from "@/lib/api";
 
+const PAGE_SIZE = 10;
+
 function formatDate(value: string) {
   return new Date(value).toLocaleString([], {
     dateStyle: "medium",
@@ -20,9 +22,11 @@ export default function KnowledgePage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ChatSearchResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
 
   const load = (q: string) => {
     setLoading(true);
+    setPage(1);
     searchChatHistory(q)
       .then(setResults)
       .finally(() => setLoading(false));
@@ -42,6 +46,13 @@ export default function KnowledgePage() {
     await deleteChatEntry(result.id);
     setResults((prev) => prev.filter((r) => r.id !== result.id));
   };
+
+  const totalPages = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedResults = results.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,7 +84,7 @@ export default function KnowledgePage() {
         <p className="text-sm text-[#5a4f3f]">No past questions found.</p>
       ) : (
         <ul className="flex flex-col gap-3">
-          {results.map((result) => {
+          {pagedResults.map((result) => {
             const card = (
               <>
                 <div className="mb-1 flex items-center justify-between">
@@ -119,6 +130,34 @@ export default function KnowledgePage() {
             );
           })}
         </ul>
+      )}
+
+      {!loading && results.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-[#8a7c68]">
+            Showing {(currentPage - 1) * PAGE_SIZE + 1}–
+            {Math.min(currentPage * PAGE_SIZE, results.length)} of {results.length}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-xs text-[#8a7c68]">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

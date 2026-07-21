@@ -156,67 +156,9 @@ export default function NewDraftPage() {
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-bold text-[#f0e6cc]">New draft</h1>
 
-      {/* Saved templates - generate in the exact format of a sample document */}
-      <div className="max-w-2xl rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-sm font-semibold text-[#e0d2ba]">Use a saved template</p>
-          <Link href="/templates" className="text-xs text-[#c9a96e] hover:underline">
-            Manage templates
-          </Link>
-        </div>
-        <p className="mb-3 text-xs text-[#8a7c68]">
-          Generate this draft in the same structure, tone and formatting as a
-          sample document you uploaded earlier.
-        </p>
-        <select
-          value={templateId}
-          onChange={(event) => setTemplateId(event.target.value)}
-          className="w-full rounded-lg border border-[#c9a96e]/15 bg-[#0f0c08] px-3 py-2 text-sm text-[#e0d2ba]"
-        >
-          <option value="">No template — plain prompt</option>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name} (v{t.version})
-            </option>
-          ))}
-        </select>
-
-        {loadingTemplate && (
-          <p className="mt-3 text-xs text-[#8a7c68]">Loading template…</p>
-        )}
-
-        {template && template.placeholders.length > 0 && (
-          <div className="mt-4 flex flex-col gap-3">
-            <p className="text-xs uppercase tracking-wide text-[#8a7c68]">
-              Fill in the details
-            </p>
-            {template.placeholders.map((placeholder) => (
-              <div key={placeholder.name} className="flex flex-col gap-1">
-                <label className="text-xs text-[#8a7c68]">
-                  {placeholder.name.replace(/_/g, " ")}
-                  {placeholder.description ? (
-                    <span className="text-[#5a4f3f]"> — {placeholder.description}</span>
-                  ) : null}
-                </label>
-                <input
-                  value={placeholderValues[placeholder.name] || ""}
-                  onChange={(event) =>
-                    setPlaceholderValues((prev) => ({
-                      ...prev,
-                      [placeholder.name]: event.target.value,
-                    }))
-                  }
-                  placeholder={`Leave blank to keep [${placeholder.name}]`}
-                  className="rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="max-w-2xl">
-        <p className="mb-2 text-xs text-[#8a7c68]">Or start from a quick prompt preset (optional):</p>
+      {/* Quick prompt presets */}
+      <div>
+        <p className="mb-2 text-xs text-[#8a7c68]">Start from a quick prompt preset (optional):</p>
         <div className="flex flex-wrap gap-2">
           {TEMPLATES.map((preset) => (
             <button
@@ -234,70 +176,135 @@ export default function NewDraftPage() {
         </div>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="flex max-w-2xl flex-col gap-4 rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5"
-      >
-        {error && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-            {error}
+      <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-3">
+        {/* Left: the main drafting inputs */}
+        <div className="flex flex-col gap-4 rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5 lg:col-span-2">
+          {error && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-[#8a7c68]">Title</label>
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              required
+              placeholder="e.g. Software Licensing Agreement"
+              className="rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
+            />
           </div>
-        )}
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#8a7c68]">Title</label>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            required
-            placeholder="e.g. Software Licensing Agreement"
-            className="rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
-          />
+          <div className="flex flex-1 flex-col gap-1">
+            <label className="text-xs text-[#8a7c68]">
+              {template
+                ? "Any extra instructions for this draft (optional)"
+                : "What do you want drafted?"}
+            </label>
+            <textarea
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              required={!template}
+              rows={14}
+              placeholder={
+                template
+                  ? "e.g. Add a clause allowing early termination with 30 days notice."
+                  : "e.g. Draft a 2-year software licensing agreement between an Indian vendor and client, with a 30-day termination notice period."
+              }
+              className="min-h-40 flex-1 resize-y rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
+            />
+          </div>
         </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#8a7c68]">
-            {template
-              ? "Any extra instructions for this draft (optional)"
-              : "What do you want drafted?"}
-          </label>
-          <textarea
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            required={!template}
-            rows={6}
-            placeholder={
-              template
-                ? "e.g. Add a clause allowing early termination with 30 days notice."
-                : "e.g. Draft a 2-year software licensing agreement between an Indian vendor and client, with a 30-day termination notice period."
-            }
-            className="rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
-          />
-        </div>
+        {/* Right: configuration sidebar */}
+        <div className="flex flex-col gap-6">
+          {/* Saved templates - generate in the exact format of a sample document */}
+          <div className="rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-semibold text-[#e0d2ba]">Use a saved template</p>
+              <Link href="/templates" className="text-xs text-[#c9a96e] hover:underline">
+                Manage
+              </Link>
+            </div>
+            <p className="mb-3 text-xs text-[#8a7c68]">
+              Generate this draft in the same structure, tone and formatting as a
+              sample document you uploaded earlier.
+            </p>
+            <select
+              value={templateId}
+              onChange={(event) => setTemplateId(event.target.value)}
+              className="w-full rounded-lg border border-[#c9a96e]/15 bg-[#0f0c08] px-3 py-2 text-sm text-[#e0d2ba]"
+            >
+              <option value="">No template — plain prompt</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} (v{t.version})
+                </option>
+              ))}
+            </select>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#8a7c68]">Case (optional)</label>
-          <select
-            value={caseId}
-            onChange={(event) => setCaseId(event.target.value)}
-            className="rounded-lg border border-[#c9a96e]/15 bg-[#0f0c08] px-3 py-2 text-sm text-[#e0d2ba]"
-          >
-            <option value="">No case</option>
-            {cases.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title}
-              </option>
-            ))}
-          </select>
-        </div>
+            {loadingTemplate && (
+              <p className="mt-3 text-xs text-[#8a7c68]">Loading template…</p>
+            )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded-lg bg-[#c9a96e] px-4 py-2 text-sm font-semibold text-[#1a0e00] disabled:opacity-50"
-        >
-          {submitting ? "Generating..." : "Generate draft"}
-        </button>
+            {template && template.placeholders.length > 0 && (
+              <div className="mt-4 flex flex-col gap-3">
+                <p className="text-xs uppercase tracking-wide text-[#8a7c68]">
+                  Fill in the details
+                </p>
+                {template.placeholders.map((placeholder) => (
+                  <div key={placeholder.name} className="flex flex-col gap-1">
+                    <label className="text-xs text-[#8a7c68]">
+                      {placeholder.name.replace(/_/g, " ")}
+                      {placeholder.description ? (
+                        <span className="text-[#5a4f3f]"> — {placeholder.description}</span>
+                      ) : null}
+                    </label>
+                    <input
+                      value={placeholderValues[placeholder.name] || ""}
+                      onChange={(event) =>
+                        setPlaceholderValues((prev) => ({
+                          ...prev,
+                          [placeholder.name]: event.target.value,
+                        }))
+                      }
+                      placeholder={`Leave blank to keep [${placeholder.name}]`}
+                      className="rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Case + generate */}
+          <div className="flex flex-col gap-4 rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-[#8a7c68]">Case (optional)</label>
+              <select
+                value={caseId}
+                onChange={(event) => setCaseId(event.target.value)}
+                className="rounded-lg border border-[#c9a96e]/15 bg-[#0f0c08] px-3 py-2 text-sm text-[#e0d2ba]"
+              >
+                <option value="">No case</option>
+                {cases.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full rounded-lg bg-[#c9a96e] px-4 py-2.5 text-sm font-semibold text-[#1a0e00] disabled:opacity-50"
+            >
+              {submitting ? "Generating..." : "Generate draft"}
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   );

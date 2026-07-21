@@ -806,6 +806,37 @@ export default function LexoraLegalChatPage() {
           background: rgba(201,169,110,0.08) !important;
         }
 
+        .chat-item { transition: background 0.15s ease, border-color 0.15s ease; }
+        .chat-item:hover {
+          border-color: rgba(201,169,110,0.22) !important;
+          background: rgba(201,169,110,0.05) !important;
+        }
+        .chat-item-actions { opacity: 0; transition: opacity 0.15s ease; }
+        .chat-item:hover .chat-item-actions,
+        .chat-item.active .chat-item-actions { opacity: 1; }
+
+        .icon-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: none;
+          background: transparent;
+          color: #8a7c68;
+          cursor: pointer;
+          padding: 3px;
+          border-radius: 6px;
+          transition: color 0.15s ease, background 0.15s ease;
+        }
+        .icon-btn:hover { color: #c9a96e; background: rgba(201,169,110,0.12); }
+        .icon-btn.danger:hover { color: #f87171; background: rgba(239,68,68,0.12); }
+
+        .logout-btn { transition: 0.15s ease; }
+        .logout-btn:hover {
+          border-color: rgba(239,68,68,0.4) !important;
+          background: rgba(239,68,68,0.1) !important;
+          color: #fca5a5 !important;
+        }
+
         ::placeholder { color: #5b4f3e; }
 
         @media (max-width: 640px) {
@@ -1026,7 +1057,7 @@ export default function LexoraLegalChatPage() {
                   {chatSessions.map((session) => (
                     <div
                       key={session.id}
-                      className="hover-card"
+                      className={`chat-item${activeSessionId === session.id ? " active" : ""}`}
                       style={{
                         borderRadius: 10,
                         border:
@@ -1080,38 +1111,32 @@ export default function LexoraLegalChatPage() {
                           >
                             {session.title}
                           </button>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
-                            <span style={{ fontSize: 9, color: "#5a4f3f" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                            <span style={{ fontSize: 10, color: "#5a4f3f" }}>
                               {session.message_count} msg{session.message_count === 1 ? "" : "s"}
                             </span>
-                            <div style={{ display: "flex", gap: 4 }}>
+                            <div className="chat-item-actions" style={{ display: "flex", gap: 2 }}>
                               <button
+                                className="icon-btn"
                                 onClick={() => startRenameSession(session)}
                                 title="Rename"
-                                style={{
-                                  border: "none",
-                                  background: "transparent",
-                                  color: "#8a7c68",
-                                  cursor: "pointer",
-                                  fontSize: 11,
-                                  padding: 2,
-                                }}
+                                aria-label="Rename chat"
                               >
-                                ✏️
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                  <path d="M12 20h9" />
+                                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                </svg>
                               </button>
                               <button
+                                className="icon-btn danger"
                                 onClick={() => handleDeleteSession(session)}
                                 title="Delete"
-                                style={{
-                                  border: "none",
-                                  background: "transparent",
-                                  color: "#8a7c68",
-                                  cursor: "pointer",
-                                  fontSize: 11,
-                                  padding: 2,
-                                }}
+                                aria-label="Delete chat"
                               >
-                                🗑️
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                  <polyline points="3 6 5 6 21 6" />
+                                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                </svg>
                               </button>
                             </div>
                           </div>
@@ -1130,22 +1155,32 @@ export default function LexoraLegalChatPage() {
                 </p>
               )}
               <button
+                className="logout-btn"
                 onClick={() => {
                   logout();
                   router.push("/login");
                 }}
                 style={{
                   width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
                   padding: "9px 12px",
                   borderRadius: 10,
                   border: "1px solid rgba(201,169,110,0.15)",
                   background: "transparent",
                   color: "#8a7c68",
                   cursor: "pointer",
-                  textAlign: "left",
-                  fontSize: 12,
+                  fontSize: 13,
+                  fontWeight: 500,
                 }}
               >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
                 Log out
               </button>
             </div>

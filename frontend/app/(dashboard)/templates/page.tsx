@@ -22,6 +22,7 @@ export default function TemplatesPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<TemplateDetail | null>(null);
+  const [showForm, setShowForm] = useState(false);
 
   const refresh = () => {
     listTemplates()
@@ -74,15 +75,28 @@ export default function TemplatesPage() {
             formatting so future drafts come out in the same format.
           </p>
         </div>
-        <Link
-          href="/drafts/new"
-          className="rounded-lg border border-[#c9a96e]/25 px-4 py-2 text-sm text-[#c9a96e] hover:border-[#c9a96e]/50"
-        >
-          + New draft
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/drafts/new"
+            className="rounded-lg border border-[#c9a96e]/25 px-4 py-2 text-sm text-[#c9a96e] hover:border-[#c9a96e]/50"
+          >
+            + New draft
+          </Link>
+          <button
+            onClick={() => {
+              setShowForm((prev) => !prev);
+              setError(null);
+              setCreated(null);
+            }}
+            className="rounded-lg bg-[#c9a96e] px-4 py-2 text-sm font-semibold text-[#1a0e00]"
+          >
+            {showForm ? "Cancel" : "+ New template"}
+          </button>
+        </div>
       </div>
 
       {/* Create template */}
+      {showForm && (
       <form
         onSubmit={handleCreate}
         className="flex max-w-2xl flex-col gap-4 rounded-xl border border-[#c9a96e]/12 bg-[#0f0c08] p-5"
@@ -144,6 +158,7 @@ export default function TemplatesPage() {
           {creating ? "Analyzing sample…" : "Create template"}
         </button>
       </form>
+      )}
 
       {/* Existing templates */}
       <div className="flex flex-col gap-3">

@@ -109,22 +109,71 @@ def extract_text_from_image(file_path: str) -> str:
 
 
 def extract_text_from_docx(file_path: str, max_chars: Optional[int] = None) -> str:
+    """
+    Extract text from a DOCX file.
+
+    Reads not just top-level paragraphs but also table cells and
+    header/footer text - many templates (e.g. rental agreements) lay their
+    entire content out inside tables, which leaves document.paragraphs
+    empty and used to make the file look like it had "no text". As a final
+    fallback we harvest every w:t text node in the package XML, which also
+    catches text boxes and other shapes python-docx doesn't model.
+    """
 
     document = Document(file_path)
     text_parts = []
     total_chars = 0
 
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-
+    def add(text: str) -> bool:
+        """Append non-empty text; return True when max_chars is reached."""
+        nonlocal total_chars
+        text = text.strip()
         if text:
             text_parts.append(text)
             total_chars += len(text)
+        return max_chars is not None and total_chars >= max_chars
 
-        if max_chars is not None and total_chars >= max_chars:
+    def emit_table(table) -> bool:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    if add(paragraph.text):
+                        return True
+                for nested in cell.tables:
+                    if emit_table(nested):
+                        return True
+        return False
+
+    for paragraph in document.paragraphs:
+        if add(paragraph.text):
             break
+    else:
+        for table in document.tables:
+            if emit_table(table):
+                break
+        else:
+            for section in document.sections:
+                for container in (section.header, section.footer):
+                    for paragraph in container.paragraphs:
+                        if add(paragraph.text):
+                            break
 
-    return "\n".join(text_parts).strip()
+    result = "\n".join(text_parts).strip()
+
+    if result:
+        return result
+
+    # Fallback: harvest every text node in the package XML. This reaches
+    # text boxes, SmartArt and other shapes that python-docx's paragraph/
+    # table model skips over entirely.
+    from docx.oxml.ns import qn
+
+    xml_parts = []
+    for text_node in document.element.iter(qn("w:t")):
+        if text_node.text:
+            xml_parts.append(text_node.text)
+
+    return "".join(xml_parts).strip()
 
 
 def extract_text_from_txt_or_md(file_path: str, max_chars: Optional[int] = None) -> str:
