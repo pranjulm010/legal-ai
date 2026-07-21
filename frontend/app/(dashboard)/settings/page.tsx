@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { GROUP_ORDER, SETTINGS_CATEGORIES, getCategory } from "./_lib/categories";
 import { useSettingsSearch } from "./_lib/useSettingsSearch";
 import { SaveBarProvider } from "./_lib/SaveBarContext";
-import { AiModeProvider, useAiMode } from "./_lib/AiModeContext";
+import { AiModeProvider } from "./_lib/AiModeContext";
 import SaveBar from "./_components/SaveBar";
 
 import WorkspacePanel from "./_panels/WorkspacePanel";
@@ -32,7 +32,6 @@ const DEFAULT_TAB = "workspace";
 
 function SettingsShellInner() {
   const { user } = useAuth();
-  const { mode } = useAiMode();
 
   const [activeTab, setActiveTab] = useState(DEFAULT_TAB);
   const [query, setQuery] = useState("");
@@ -45,14 +44,12 @@ function SettingsShellInner() {
     setHydrated(true);
   }, []);
 
-  // API Integrations only makes sense once the workspace is Customer
-  // Managed - hidden entirely in Platform Managed mode, per spec.
-  const visibleCategories = useMemo(
-    () => SETTINGS_CATEGORIES.filter((c) => c.id !== "api-integrations" || mode === "CUSTOMER"),
-    [mode]
-  );
-
-  const results = useSettingsSearch(query, visibleCategories);
+  // API Integrations stays visible in both modes - an admin has to be able
+  // to reach it to connect and test a key BEFORE switching to Customer
+  // Managed (the mode switch itself is blocked server-side until a
+  // connected credential exists), so hiding it in Platform Managed mode
+  // would make Customer Managed unreachable.
+  const results = useSettingsSearch(query, SETTINGS_CATEGORIES);
 
   const grouped = useMemo(() => {
     const byGroup: Record<string, typeof results> = {};

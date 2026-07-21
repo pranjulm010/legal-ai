@@ -47,7 +47,7 @@ def _has_connected_credential(workspace) -> bool:
     return WorkspaceAPIKey.objects.filter(workspace=workspace, enabled=True, status="connected").exists()
 
 
-@settings_router.get("/ai-provider", response={200: AIProviderModeSchema})
+@settings_router.get("/ai-provider/", response={200: AIProviderModeSchema})
 def get_ai_provider_mode(request):
     workspace = request.auth.firm
     configuration = WorkspaceAIConfiguration.objects.filter(workspace=workspace).first()
@@ -56,7 +56,7 @@ def get_ai_provider_mode(request):
 
 
 @settings_router.put(
-    "/ai-provider", response={200: AIProviderModeSchema, 400: ErrorSchema, 403: ErrorSchema}
+    "/ai-provider/", response={200: AIProviderModeSchema, 400: ErrorSchema, 403: ErrorSchema}
 )
 def update_ai_provider_mode(request, payload: AIProviderModeUpdateSchema):
     denied = require_permission(request, "manage_team")
@@ -166,7 +166,7 @@ def _serialize(provider: str, credential) -> dict:
     }
 
 
-@settings_router.get("/api-integrations", response={200: List[APIIntegrationSchema]})
+@settings_router.get("/api-integrations/", response={200: List[APIIntegrationSchema]})
 def list_api_integrations(request):
     workspace = request.auth.firm
     credentials = {c.provider: c for c in WorkspaceAPIKey.objects.filter(workspace=workspace)}
@@ -174,7 +174,7 @@ def list_api_integrations(request):
 
 
 @settings_router.post(
-    "/api-integrations", response={201: APIIntegrationSchema, 400: ErrorSchema, 403: ErrorSchema}
+    "/api-integrations/", response={201: APIIntegrationSchema, 400: ErrorSchema, 403: ErrorSchema}
 )
 def create_api_integration(request, payload: APIIntegrationSaveSchema):
     denied = require_permission(request, "manage_team")
@@ -221,107 +221,16 @@ def _get_credential_or_error(workspace, provider: str):
         return None, (400, {"error": f"No credential saved yet for {provider}."})
 
 
-@settings_router.put(
-    "/api-integrations/{provider}",
-    response={200: APIIntegrationSchema, 400: ErrorSchema, 403: ErrorSchema},
-)
-def update_api_integration(request, provider: str, payload: APIIntegrationUpdateSchema):
-    denied = require_permission(request, "manage_team")
-    if denied:
-        return denied
-
-    workspace = request.auth.firm
-    credential, error = _get_credential_or_error(workspace, provider)
-    if error:
-        return error
-
-    if payload.api_key is not None and payload.api_key.strip():
-        credential.encrypted_api_key = encrypt_secret(payload.api_key.strip())
-        credential.status = "untested"
-        credential.last_tested_at = None
-        credential.last_test_message = ""
-    if payload.base_url is not None:
-        credential.base_url = payload.base_url.strip()
-    if payload.model is not None:
-        credential.model = payload.model.strip()
-    if payload.extra_config is not None:
-        credential.extra_config = payload.extra_config
-
-    if payload.enabled is True:
-        if credential.status != "connected":
-            return 400, {"error": "Test the connection successfully before enabling this provider."}
-        # At most one enabled credential per workspace - "exactly one
-        # active provider" mirrors "exactly one provider_mode".
-        WorkspaceAPIKey.objects.filter(workspace=workspace).exclude(id=credential.id).update(enabled=False)
-        credential.enabled = True
-    elif payload.enabled is False:
-        configuration = WorkspaceAIConfiguration.objects.filter(workspace=workspace).first()
-        if (
-            credential.enabled
-            and configuration is not None
-            and configuration.provider_mode == WorkspaceAIConfiguration.CUSTOMER
-        ):
-            return 400, {
-                "error": (
-                    "This is the active provider for Customer Managed mode - enable a "
-                    "different provider first, or switch back to Platform Managed."
-                )
-            }
-        credential.enabled = False
-
-    credential.save()
-
-    log_audit_event(
-        firm=workspace,
-        actor=request.auth,
-        action="ai_provider_credential_updated",
-        details=f"Updated {provider}.",
-    )
-
-    return 200, _serialize(provider, credential)
-
-
-@settings_router.delete(
-    "/api-integrations/{provider}",
-    response={200: SuccessSchema, 400: ErrorSchema, 403: ErrorSchema},
-)
-def delete_api_integration(request, provider: str):
-    denied = require_permission(request, "manage_team")
-    if denied:
-        return denied
-
-    workspace = request.auth.firm
-    credential, error = _get_credential_or_error(workspace, provider)
-    if error:
-        return error
-
-    configuration = WorkspaceAIConfiguration.objects.filter(workspace=workspace).first()
-    if (
-        credential.enabled
-        and configuration is not None
-        and configuration.provider_mode == WorkspaceAIConfiguration.CUSTOMER
-    ):
-        return 400, {
-            "error": (
-                "This is the active provider for Customer Managed mode - enable a "
-                "different provider first, or switch back to Platform Managed."
-            )
-        }
-
-    credential.delete()
-
-    log_audit_event(
-        firm=workspace,
-        actor=request.auth,
-        action="ai_provider_credential_deleted",
-        details=f"Deleted stored credential for {provider}.",
-    )
-
-    return 200, {"success": True}
-
-
 # ---------------------------------------------------------------------------
 # POST /settings/api-integrations/test
+#
+# Registered here, BEFORE the /api-integrations/{provider} routes below:
+# Django's URL resolver matches path patterns in registration order, and
+# "/api-integrations/test" would otherwise be captured by the wildcard
+# "/api-integrations/{provider}" pattern (provider="test") since that
+# pattern is tried first, causing a 405 rather than ever reaching this
+# view. Literal paths must be registered before wildcard siblings that
+# could also match them.
 # ---------------------------------------------------------------------------
 
 
@@ -392,7 +301,7 @@ def _test_provider_connection(credential) -> "tuple[bool, str]":
 
 
 @settings_router.post(
-    "/api-integrations/test",
+    "/api-integrations/test/",
     response={200: APIIntegrationSchema, 400: ErrorSchema, 403: ErrorSchema},
 )
 def test_api_integration(request, payload: APIIntegrationTestSchema):
@@ -422,3 +331,107 @@ def test_api_integration(request, payload: APIIntegrationTestSchema):
     )
 
     return 200, _serialize(payload.provider, credential)
+
+
+# ---------------------------------------------------------------------------
+# PUT/DELETE /settings/api-integrations/{provider}
+# ---------------------------------------------------------------------------
+
+
+@settings_router.put(
+    "/api-integrations/{provider}/",
+    response={200: APIIntegrationSchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def update_api_integration(request, provider: str, payload: APIIntegrationUpdateSchema):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    workspace = request.auth.firm
+    credential, error = _get_credential_or_error(workspace, provider)
+    if error:
+        return error
+
+    if payload.api_key is not None and payload.api_key.strip():
+        credential.encrypted_api_key = encrypt_secret(payload.api_key.strip())
+        credential.status = "untested"
+        credential.last_tested_at = None
+        credential.last_test_message = ""
+    if payload.base_url is not None:
+        credential.base_url = payload.base_url.strip()
+    if payload.model is not None:
+        credential.model = payload.model.strip()
+    if payload.extra_config is not None:
+        credential.extra_config = payload.extra_config
+
+    if payload.enabled is True:
+        if credential.status != "connected":
+            return 400, {"error": "Test the connection successfully before enabling this provider."}
+        # At most one enabled credential per workspace - "exactly one
+        # active provider" mirrors "exactly one provider_mode".
+        WorkspaceAPIKey.objects.filter(workspace=workspace).exclude(id=credential.id).update(enabled=False)
+        credential.enabled = True
+    elif payload.enabled is False:
+        configuration = WorkspaceAIConfiguration.objects.filter(workspace=workspace).first()
+        if (
+            credential.enabled
+            and configuration is not None
+            and configuration.provider_mode == WorkspaceAIConfiguration.CUSTOMER
+        ):
+            return 400, {
+                "error": (
+                    "This is the active provider for Customer Managed mode - enable a "
+                    "different provider first, or switch back to Platform Managed."
+                )
+            }
+        credential.enabled = False
+
+    credential.save()
+
+    log_audit_event(
+        firm=workspace,
+        actor=request.auth,
+        action="ai_provider_credential_updated",
+        details=f"Updated {provider}.",
+    )
+
+    return 200, _serialize(provider, credential)
+
+
+@settings_router.delete(
+    "/api-integrations/{provider}/",
+    response={200: SuccessSchema, 400: ErrorSchema, 403: ErrorSchema},
+)
+def delete_api_integration(request, provider: str):
+    denied = require_permission(request, "manage_team")
+    if denied:
+        return denied
+
+    workspace = request.auth.firm
+    credential, error = _get_credential_or_error(workspace, provider)
+    if error:
+        return error
+
+    configuration = WorkspaceAIConfiguration.objects.filter(workspace=workspace).first()
+    if (
+        credential.enabled
+        and configuration is not None
+        and configuration.provider_mode == WorkspaceAIConfiguration.CUSTOMER
+    ):
+        return 400, {
+            "error": (
+                "This is the active provider for Customer Managed mode - enable a "
+                "different provider first, or switch back to Platform Managed."
+            )
+        }
+
+    credential.delete()
+
+    log_audit_event(
+        firm=workspace,
+        actor=request.auth,
+        action="ai_provider_credential_deleted",
+        details=f"Deleted stored credential for {provider}.",
+    )
+
+    return 200, {"success": True}
