@@ -120,6 +120,60 @@ class GoogleDriveConnection(models.Model):
         return f"Drive connection for {self.firm.name}"
 
 
+class FirmLLMConfig(models.Model):
+    """
+    A firm's own LLM API credentials, one row per provider. At most one
+    config per firm is "active" - when none is, the firm runs on the
+    platform's default model (settings.GROQ_API_KEY / GROQ_MODEL). Keys
+    are per-firm, not per-user, for the same reason as
+    GoogleDriveConnection tokens: every lawyer's questions run through
+    the same firm-level pipeline, so the credential is a shared firm
+    resource with the same trust boundary as the firm's documents.
+    """
+
+    PROVIDER_CHOICES = [
+        ("groq", "Groq"),
+        ("openai", "OpenAI"),
+        ("anthropic", "Anthropic"),
+        ("gemini", "Google Gemini"),
+    ]
+
+    # Providers the pipeline can actually route requests through today.
+    # Keys for the others can be stored/validated but not activated yet.
+    ROUTABLE_PROVIDERS = ["groq"]
+
+    firm = models.ForeignKey(Firm, on_delete=models.CASCADE, related_name="llm_configs")
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+    api_key = models.TextField()
+    model_name = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Optional override; empty means the provider/platform default model.",
+    )
+    is_active = models.BooleanField(default=False)
+    last_validated_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        LawyerProfile, on_delete=models.SET_NULL, null=True, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["firm", "provider"], name="unique_llm_provider_per_firm"
+            )
+        ]
+
+    def masked_key(self) -> str:
+        # Never expose the stored key back to the client - last 4 chars is
+        # enough for an admin to recognize which key they saved.
+        tail = self.api_key[-4:] if len(self.api_key) >= 8 else ""
+        return f"••••{tail}"
+
+    def __str__(self):
+        return f"{self.provider} config for {self.firm.name}"
+
+
 class AuditLog(models.Model):
     """Firm-wide audit trail for admin/security-relevant actions (team
     changes, firm profile edits, case deletion, etc.) - separate from

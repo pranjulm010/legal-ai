@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 from django.conf import settings
 
-from .groq_client import get_groq_client
+from .groq_client import get_groq_client, get_groq_model
 
 # Full document text is sent directly to the LLM for redlining (not the
 # chunked/vector RAG pipeline) since a redline review needs the whole
@@ -74,7 +74,7 @@ Sample document to analyze:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
@@ -247,7 +247,7 @@ Now produce the complete draft.
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
@@ -292,7 +292,7 @@ Document to review:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},

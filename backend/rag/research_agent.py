@@ -24,6 +24,7 @@ from .groq_client import (
     _style_instructions,
     _wrap_untrusted_content,
     get_groq_client,
+    get_groq_model,
 )
 from .rag_pipeline import (
     _best_distance,
@@ -78,7 +79,7 @@ Return ONLY a JSON object of this exact form:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": question},
@@ -145,7 +146,7 @@ Now synthesize one complete answer to the original question.
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
@@ -534,7 +535,7 @@ Rewritten, self-contained question:
 
     try:
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=get_groq_model(),
             messages=[
                 {"role": "system", "content": system_prompt.strip()},
                 {"role": "user", "content": user_prompt.strip()},
@@ -569,7 +570,7 @@ def _reflection_check(question: str, answer: str, tool_context: str, history_tex
 
     try:
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=get_groq_model(),
             messages=[
                 {
                     "role": "system",

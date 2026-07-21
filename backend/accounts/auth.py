@@ -3,6 +3,8 @@ from ninja.security import HttpBearer
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import AccessToken
 
+from rag.llm_override import set_request_firm
+
 from .models import LawyerProfile
 
 
@@ -26,6 +28,10 @@ class JWTAuth(HttpBearer):
 
         if profile is not None and not profile.firm.is_active:
             return None
+
+        # Stamp the firm onto the request context so any LLM call made while
+        # serving it can pick up the firm's own model/key (see llm_override).
+        set_request_firm(profile.firm_id if profile is not None else None)
 
         return profile
 

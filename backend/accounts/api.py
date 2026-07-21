@@ -59,6 +59,12 @@ class RefreshResponseSchema(Schema):
 class MeResponseSchema(Schema):
     username: str
     full_name: str
+    first_name: str
+    last_name: str
+    email: str
+    department: str
+    date_joined: datetime
+    last_login: Optional[datetime] = None
     role: str
     firm_id: int
     firm_name: str
@@ -384,18 +390,103 @@ def refresh_token(request, payload: RefreshSchema):
     return 200, {"access": str(refresh.access_token)}
 
 
-@router.get("/me/", auth=JWTAuth(), response={200: MeResponseSchema})
-def me(request):
-    profile = request.auth
-
-    return 200, {
-        "username": profile.user.username,
-        "full_name": profile.user.get_full_name() or profile.user.username,
+def _serialize_me(profile: LawyerProfile) -> dict:
+    user = profile.user
+    return {
+        "username": user.username,
+        "full_name": user.get_full_name() or user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email": user.email,
+        "department": profile.department,
+        "date_joined": user.date_joined,
+        "last_login": user.last_login,
         "role": profile.role,
         "firm_id": profile.firm_id,
         "firm_name": profile.firm.name,
         "firm_size": profile.firm.size,
     }
+
+
+@router.get("/me/", auth=JWTAuth(), response={200: MeResponseSchema})
+def me(request):
+    return 200, _serialize_me(request.auth)
+
+
+class MeUpdateSchema(Schema):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    department: Optional[str] = None
+
+
+@router.patch("/me/", auth=JWTAuth(), response={200: MeResponseSchema, 400: ErrorSchema})
+def update_me(request, payload: MeUpdateSchema):
+    """Anyone can edit their OWN personal details - this only ever touches
+    request.auth's user, so no extra permission gate is needed."""
+    profile = request.auth
+    user = profile.user
+    data = payload.dict(exclude_unset=True)
+
+    if "email" in data:
+        email = (data["email"] or "").strip()
+        try:
+            validate_email(email)
+        except ValidationError:
+            return 400, {"error": "Please enter a valid email address."}
+
+        if User.objects.filter(email__iexact=email).exclude(id=user.id).exists():
+            return 400, {"error": "This email is already associated with another account."}
+
+        user.email = email
+
+    if "first_name" in data:
+        user.first_name = (data["first_name"] or "").strip()
+
+    if "last_name" in data:
+        user.last_name = (data["last_name"] or "").strip()
+
+    user.save()
+
+    if "department" in data:
+        profile.department = (data["department"] or "").strip()
+        profile.save(update_fields=["department"])
+
+    log_audit_event(profile.firm, profile, "profile_updated", ", ".join(data.keys()))
+
+    return 200, _serialize_me(profile)
+
+
+class ChangePasswordSchema(Schema):
+    current_password: str
+    new_password: str
+
+
+@router.post(
+    "/change-password/",
+    auth=JWTAuth(),
+    response={200: MeResponseSchema, 400: ErrorSchema, 429: ErrorSchema},
+)
+def change_password(request, payload: ChangePasswordSchema):
+    profile = request.auth
+    user = profile.user
+
+    rate_key = f"change-password:{user.id}"
+    if rate_limit_exceeded(rate_key, limit=8, window_seconds=300):
+        return 429, {"error": "Too many attempts. Please try again in a few minutes."}
+
+    if not user.check_password(payload.current_password):
+        return 400, {"error": "Your current password is incorrect."}
+
+    if len(payload.new_password) < 8:
+        return 400, {"error": "New password must be at least 8 characters."}
+
+    user.set_password(payload.new_password)
+    user.save()
+
+    log_audit_event(profile.firm, profile, "password_changed")
+
+    return 200, _serialize_me(profile)
 
 
 # ---------------------------------------------------------------------------

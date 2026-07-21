@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 from django.conf import settings
 from groq import Groq
 
+from .llm_override import get_override
+
 
 def _history_messages(history: Optional[List[Dict[str, str]]]) -> list:
     """Turns a list of {"question", "answer"} pairs into proper alternating
@@ -37,10 +39,27 @@ PARTY or the ACCUSED/OTHER PARTY, and frame the advice accordingly:
 
 
 def get_groq_client():
+    # A firm with its own active Groq credentials runs on those instead of
+    # the platform's key (see rag.llm_override for how the firm gets here).
+    override = get_override()
+    if override is not None and override.provider == "groq":
+        return Groq(api_key=override.api_key)
+
     if not settings.GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY is missing in .env file.")
 
     return Groq(api_key=settings.GROQ_API_KEY)
+
+
+def get_groq_model() -> str:
+    """The model every rag call should use for the current request: the
+    firm's own model override when one is active, else the platform
+    default. Call sites use this instead of settings.GROQ_MODEL directly."""
+    override = get_override()
+    if override is not None and override.provider == "groq" and override.model_name:
+        return override.model_name
+
+    return settings.GROQ_MODEL
 
 
 _META_ENTITIES = ["cases", "documents", "lawyers", "drafts", "contacts", "reminders", "drive", "none"]
@@ -194,7 +213,7 @@ def classify_meta_question(question: str) -> Optional[dict]:
     try:
         client = get_groq_client()
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=get_groq_model(),
             messages=[
                 {"role": "system", "content": _META_CLASSIFIER_PROMPT.strip()},
                 {"role": "user", "content": question},
@@ -345,7 +364,7 @@ def classify_intent(
     try:
         client = get_groq_client()
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=get_groq_model(),
             messages=[
                 {"role": "system", "content": _INTENT_ROUTER_PROMPT.strip()},
                 {"role": "user", "content": user_content},
@@ -410,7 +429,7 @@ def classify_web_search_intent(question: str) -> bool:
     try:
         client = get_groq_client()
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=get_groq_model(),
             messages=[
                 {"role": "system", "content": _WEB_INTENT_CLASSIFIER_PROMPT.strip()},
                 {"role": "user", "content": question},
@@ -466,7 +485,7 @@ def classify_law_related(question: str) -> bool:
     try:
         client = get_groq_client()
         response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
+            model=get_groq_model(),
             messages=[
                 {"role": "system", "content": _LAW_RELATED_CLASSIFIER_PROMPT.strip()},
                 {"role": "user", "content": question},
@@ -611,7 +630,7 @@ Now answer the question using only the provided document context.
     )
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=messages,
         temperature=0.1,
         max_tokens=1200,
@@ -665,7 +684,7 @@ Always end with:
     )
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=messages,
         temperature=0.2,
         max_tokens=1200,
@@ -732,7 +751,7 @@ Now answer the question using only the provided public web context.
     )
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=messages,
         temperature=0.1,
         max_tokens=1200,

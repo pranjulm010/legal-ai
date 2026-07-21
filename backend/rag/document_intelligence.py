@@ -3,7 +3,7 @@ from typing import Dict, List
 
 from django.conf import settings
 
-from .groq_client import get_groq_client
+from .groq_client import get_groq_client, get_groq_model
 
 # Full document text sent directly to the LLM (not the chunked RAG
 # pipeline) since these operations need whole-document context. Capped to
@@ -19,7 +19,7 @@ def summarize_document(document_text: str) -> str:
     client = get_groq_client()
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {
                 "role": "system",
@@ -44,7 +44,7 @@ def generate_client_summary(document_text: str) -> str:
     client = get_groq_client()
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {
                 "role": "system",
@@ -93,7 +93,7 @@ Rules:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": _truncate(document_text)},
@@ -140,7 +140,7 @@ Rules:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": _truncate(document_text)},
@@ -186,7 +186,7 @@ one but missing from the other. Use only what's in the documents.
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {
                 "role": "system",
@@ -247,7 +247,7 @@ Rules:
 """
 
     response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=get_groq_model(),
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": _truncate(document_text)},

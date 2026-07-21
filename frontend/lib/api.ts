@@ -464,8 +464,41 @@ export const logout = () => {
   clearTokens();
 };
 
-export const fetchMe = async () => {
+export interface MeProfile {
+  username: string;
+  full_name: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  department: string;
+  date_joined: string;
+  last_login: string | null;
+  role: string;
+  firm_id: number;
+  firm_name: string;
+  firm_size: string;
+}
+
+export const fetchMe = async (): Promise<MeProfile> => {
   const response = await api.get("/auth/me/");
+  return response.data;
+};
+
+export const updateMe = async (
+  payload: Partial<Pick<MeProfile, "first_name" | "last_name" | "email" | "department">>
+): Promise<MeProfile> => {
+  const response = await api.patch("/auth/me/", payload);
+  return response.data;
+};
+
+export const changePassword = async (
+  currentPassword: string,
+  newPassword: string
+): Promise<MeProfile> => {
+  const response = await api.post("/auth/change-password/", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
   return response.data;
 };
 
@@ -717,6 +750,79 @@ export const syncDrive = async (): Promise<DriveSyncResult> => {
 
 export const disconnectDrive = async (): Promise<void> => {
   await api.delete("/integrations/google-drive/");
+};
+
+// ---------------------------------------------------------------------------
+// LLM configuration (platform default vs the firm's own API keys)
+// ---------------------------------------------------------------------------
+
+export type LlmProvider = "groq" | "openai" | "anthropic" | "gemini";
+
+export interface LlmConfigItem {
+  provider: LlmProvider;
+  provider_label: string;
+  model_name: string;
+  masked_key: string;
+  is_active: boolean;
+  routable: boolean;
+  last_validated_at: string | null;
+  updated_at: string;
+}
+
+export interface LlmConfigStatus {
+  using_platform_default: boolean;
+  active_provider: LlmProvider | null;
+  platform_provider: string;
+  platform_model: string;
+  routable_providers: string[];
+  configs: LlmConfigItem[];
+}
+
+export const getLlmConfig = async (): Promise<LlmConfigStatus> => {
+  const response = await api.get("/integrations/llm/");
+  return response.data;
+};
+
+export const validateLlmKey = async (
+  provider: LlmProvider,
+  apiKey: string
+): Promise<{ valid: boolean; error: string | null }> => {
+  const response = await api.post("/integrations/llm/validate/", {
+    provider,
+    api_key: apiKey,
+  });
+  return response.data;
+};
+
+export const saveLlmKey = async (
+  provider: LlmProvider,
+  apiKey: string,
+  modelName: string = ""
+): Promise<LlmConfigStatus> => {
+  const response = await api.put(`/integrations/llm/${provider}/`, {
+    api_key: apiKey,
+    model_name: modelName,
+  });
+  return response.data;
+};
+
+export const activateLlmProvider = async (
+  provider: LlmProvider
+): Promise<LlmConfigStatus> => {
+  const response = await api.post(`/integrations/llm/${provider}/activate/`);
+  return response.data;
+};
+
+export const restoreLlmPlatformDefault = async (): Promise<LlmConfigStatus> => {
+  const response = await api.post("/integrations/llm/platform-default/");
+  return response.data;
+};
+
+export const deleteLlmKey = async (
+  provider: LlmProvider
+): Promise<LlmConfigStatus> => {
+  const response = await api.delete(`/integrations/llm/${provider}/`);
+  return response.data;
 };
 
 export const importLawyersCsv = async (file: File): Promise<LawyerImportResult> => {

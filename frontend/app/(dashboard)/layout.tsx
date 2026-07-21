@@ -80,7 +80,6 @@ export default function DashboardLayout({
             {navItem("/templates", "Templates")}
             {navItem("/contacts", "Contacts")}
             {navItem("/knowledge", "Knowledge")}
-            {navItem("/team", "Team")}
             {navItem("/settings", "Settings")}
             {user.role === "admin" && navItem("/admin", "Admin Dashboard")}
           </>
