@@ -81,9 +81,27 @@ function emptyDraft(): TileDraft {
 
 const STATUS_STYLE: Record<string, string> = {
   connected: "bg-green-500/10 text-green-400",
+  not_connected: "bg-red-500/10 text-red-300",
   failed: "bg-red-500/10 text-red-300",
   untested: "bg-[#5a4f3f]/15 text-[#8a7c68]",
 };
+
+const STATUS_LABEL: Record<string, string> = {
+  connected: "Connected",
+  not_connected: "Not connected",
+  failed: "Connection failed",
+  untested: "Untested",
+};
+
+// "Connected" is reserved for a provider that both tested OK AND is the
+// active provider in use - a tested-but-disconnected key reads as "Not
+// connected" (red) rather than a stale green "Connected" badge.
+function displayStatus(saved: APIIntegration | undefined): keyof typeof STATUS_LABEL {
+  if (!saved?.configured) return "untested";
+  if (saved.status === "failed") return "failed";
+  if (saved.status === "connected") return saved.enabled ? "connected" : "not_connected";
+  return "untested";
+}
 
 export default function ApiIntegrationsPanel() {
   const { refresh: refreshAiMode } = useAiMode();
@@ -130,32 +148,25 @@ export default function ApiIntegrationsPanel() {
     setError(null);
     setNotice(null);
     try {
-      const result = await saveApiIntegration({
+      const saved = await saveApiIntegration({
         provider: id,
         api_key: draft.apiKey.trim(),
         base_url: draft.baseUrl.trim(),
         model: draft.model.trim(),
       });
-      setIntegrations((prev) => ({ ...prev, [id]: result }));
+      setIntegrations((prev) => ({ ...prev, [id]: saved }));
       setDraft(id, { apiKey: "" });
-      setNotice(`Saved credentials for ${PROVIDERS.find((p) => p.id === id)?.name}. Test the connection before enabling it.`);
+
+      // Test connection immediately on save - no separate "Test connection"
+      // step, but Connect still stays gated on a successful test result.
+      const tested = await testApiIntegration(id);
+      setIntegrations((prev) => ({ ...prev, [id]: tested }));
+      setNotice(
+        tested.last_test_message ||
+          (tested.status === "connected" ? "Saved and connected successfully." : "Saved, but the connection test failed.")
+      );
     } catch (err: any) {
       setError(err?.response?.data?.error || "Failed to save credentials.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleTest = async (id: AIProviderId) => {
-    setBusy(`${id}:test`);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await testApiIntegration(id);
-      setIntegrations((prev) => ({ ...prev, [id]: result }));
-      setNotice(result.last_test_message || (result.status === "connected" ? "Connection test succeeded." : "Connection test failed."));
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Failed to test connection.");
     } finally {
       setBusy(null);
     }
@@ -249,7 +260,7 @@ export default function ApiIntegrationsPanel() {
           {PROVIDERS.map((provider) => {
             const saved = integrations[provider.id];
             const draft = drafts[provider.id];
-            const status = saved?.status ?? "untested";
+            const status = displayStatus(saved);
 
             return (
               <section
@@ -267,7 +278,7 @@ export default function ApiIntegrationsPanel() {
                     )}
                   </div>
                   <span className={`rounded-full px-2 py-0.5 text-[10px] ${STATUS_STYLE[status]}`}>
-                    {status === "connected" ? "Connected" : status === "failed" ? "Connection failed" : "Untested"}
+                    {STATUS_LABEL[status]}
                   </span>
                 </div>
 
@@ -356,29 +367,22 @@ export default function ApiIntegrationsPanel() {
 
                 {saved?.configured && (
                   <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => handleTest(provider.id)}
-                      disabled={busy === `${provider.id}:test`}
-                      className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#8a7c68] hover:text-[#c9a96e] disabled:opacity-50"
-                    >
-                      {busy === `${provider.id}:test` ? "Testing..." : "Test connection"}
-                    </button>
                     {saved.enabled ? (
                       <button
                         onClick={() => handleDisable(provider.id)}
                         disabled={busy === `${provider.id}:disable`}
                         className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#8a7c68] hover:text-[#c9a96e] disabled:opacity-50"
                       >
-                        {busy === `${provider.id}:disable` ? "Disabling..." : "Disable"}
+                        {busy === `${provider.id}:disable` ? "Disconnecting..." : "Disconnect"}
                       </button>
                     ) : (
                       <button
                         onClick={() => handleEnable(provider.id)}
                         disabled={saved.status !== "connected" || busy === `${provider.id}:enable`}
-                        title={saved.status !== "connected" ? "Test the connection successfully first" : ""}
+                        title={saved.status !== "connected" ? "Save a working API key for this provider first" : ""}
                         className="rounded-lg border border-[#c9a96e]/15 px-3 py-1 text-xs text-[#c9a96e] disabled:opacity-40"
                       >
-                        {busy === `${provider.id}:enable` ? "Enabling..." : "Enable"}
+                        {busy === `${provider.id}:enable` ? "Connecting..." : "Connect"}
                       </button>
                     )}
                     <button
