@@ -305,6 +305,116 @@ WEB_SEARCH_NUDGE = (
     "For the latest or more specific details on this, you can also try a web search."
 )
 
+# Shown in "Firm Search" mode when the firm's own records (uploaded documents,
+# case files, history) don't contain anything relevant. In this mode the
+# assistant deliberately does NOT fall back to a web search or to the model's
+# general knowledge - the whole point of the mode is to answer strictly from
+# the firm's data - so instead of inventing an answer it says plainly that
+# nothing relevant was found.
+FIRM_ONLY_NOT_FOUND_MESSAGE = (
+    "I couldn't find anything relevant in your firm's records (uploaded "
+    "documents, case files, or history) to answer that. In Firm Search mode I "
+    "only use the firm's own data - switch to Web Search mode if you'd like a "
+    "general-knowledge or web-based answer instead."
+)
+
+
+def firm_not_found_result() -> Dict:
+    """The "nothing in the firm's records" reply for Firm Search mode - no web
+    or general-knowledge fallback (see FIRM_ONLY_NOT_FOUND_MESSAGE)."""
+    return {
+        "answer": FIRM_ONLY_NOT_FOUND_MESSAGE,
+        "sources": [],
+        "needs_web_confirmation": False,
+        "route": ROUTE_FIRM_DATABASE,
+        "confidence_level": None,
+    }
+
+
+def answer_web_only(
+    question: str,
+    answer_mode: str = "mixed",
+    history: Optional[List[Dict]] = None,
+    region: str = "india",
+) -> Dict:
+    """
+    "Web Search" mode: answer WITHOUT touching any firm data (no uploaded
+    documents, no case files, no firm history). Selecting this mode is itself
+    the user's consent to search the web, so - unlike the firm paths - this
+    never returns needs_web_confirmation.
+
+    Order of preference:
+    1. A genuinely non-legal question (sports, trivia, coding, ...) is out of
+       scope for this assistant in EVERY mode, so it's turned away plainly
+       rather than given a confusing "no web sources" reply.
+    2. Otherwise ground the answer in trusted public web sources when they
+       actually address the question.
+    3. When the web turns up nothing usable - which is common, since the legal
+       web search returns legal-site hits even for questions they don't cover
+       (e.g. "explain Article 21") - fall back to the model's own general
+       knowledge instead of refusing. General knowledge is the baseline in
+       this mode; the web is only there to enrich or freshen it.
+
+    Responses stay concise and professional and never reference firm data.
+    """
+    # (1) Keep the assistant's scope consistent across modes: it only handles
+    # legal matters. classify_law_related fails open (returns True on error),
+    # so a genuine legal question is never wrongly turned away.
+    if not classify_law_related(question):
+        return {
+            "answer": NOT_LAW_RELATED_MESSAGE,
+            "sources": [],
+            "needs_web_confirmation": False,
+            "route": None,
+            "confidence_level": None,
+        }
+
+    # (2) Try to ground in public web sources. Unlike the firm paths' strict
+    # web-grounding, here an unhelpful web result must NOT block the answer -
+    # so if the grounded answer admits the pages didn't cover the question,
+    # fall through to general knowledge below.
+    web_results = search_legal_web(question, region=region)
+    if web_results:
+        web_context = build_web_context(web_results)
+        web_answer = generate_web_grounded_answer(
+            question=question,
+            context=web_context,
+            mode=answer_mode,
+            context_label="general web sources",
+            history=history,
+        )
+        if not is_insufficient_answer(web_answer):
+            sources = [
+                {
+                    "source_type": "web",
+                    "source_site": result.get("source_site"),
+                    "title": result.get("title"),
+                    "url": result.get("url"),
+                    "preview": result.get("snippet", "")[:300],
+                }
+                for result in web_results
+            ]
+            return {
+                "answer": web_answer,
+                "sources": sources,
+                "needs_web_confirmation": False,
+                "route": ROUTE_WEB_SEARCH,
+                "confidence_level": CONFIDENCE_BY_ROUTE[ROUTE_WEB_SEARCH],
+            }
+
+    # (3) No usable web grounding - answer from the model's own general
+    # knowledge. generate_knowledge_based_answer already labels its output as
+    # general (not firm-sourced) and applies the usual anti-hallucination /
+    # disclaimer rules.
+    answer = generate_knowledge_based_answer(question=question, mode=answer_mode, history=history)
+    return {
+        "answer": answer,
+        "sources": [],
+        "needs_web_confirmation": False,
+        "route": ROUTE_LLM_KNOWLEDGE,
+        "confidence_level": CONFIDENCE_BY_ROUTE[ROUTE_LLM_KNOWLEDGE],
+    }
+
 
 def out_of_scope_result(
     question: str,
@@ -412,6 +522,7 @@ def answer_question(
     answer_mode: str = "mixed",
     history: Optional[List[Dict]] = None,
     region: str = "india",
+    firm_only: bool = False,
 ) -> Dict:
     """
     Retrieval routing for a question scoped to one uploaded document.
@@ -477,6 +588,12 @@ def answer_question(
     explicit_web = _explicit_web_intent(question)
 
     if is_public:
+        # Firm Search mode: the uploaded document is the only source a public
+        # user has, and it didn't answer - so there's nothing more to try. No
+        # web / general-knowledge fallback in this mode.
+        if firm_only:
+            return firm_not_found_result()
+
         # No firm-database step for the general public - go straight to
         # web. An explicit request in the question is treated as consent
         # already given; otherwise ask first before searching.
@@ -515,8 +632,13 @@ def answer_question(
                 "confidence_level": CONFIDENCE_BY_ROUTE[ROUTE_FIRM_DATABASE],
             }
 
-    # Nothing in the document or the firm's database. An explicit request
-    # in the question itself counts as consent; otherwise ask first.
+    # Nothing in the document or the firm's database. In Firm Search mode we
+    # stop here rather than reaching for the web or general knowledge.
+    if firm_only:
+        return firm_not_found_result()
+
+    # An explicit request in the question itself counts as consent; otherwise
+    # ask first.
     if not (explicit_web or allow_web_search):
         return _ask_web_consent(question, firm_chunks, firm_best_distance, answer_mode, history)
 
@@ -690,6 +812,7 @@ def answer_general_question(
     answer_mode: str = "mixed",
     history: Optional[List[Dict]] = None,
     region: str = "india",
+    firm_only: bool = False,
 ) -> Dict:
     """
     Answers a question that isn't scoped to one specific uploaded document
@@ -742,8 +865,13 @@ def answer_general_question(
 
     if is_public and not UploadedDocument.objects.filter(firm=firm).exists():
         # General Public, no documents uploaded at all: nothing local to
-        # search, so ask before searching the web (unless already
-        # explicitly requested/confirmed).
+        # search. In Firm Search mode that's the end of the road - no web /
+        # general-knowledge fallback.
+        if firm_only:
+            return firm_not_found_result()
+
+        # ask before searching the web (unless already explicitly
+        # requested/confirmed).
         if explicit_web or allow_web_search:
             web_results = search_legal_web(question, region=region)
             if web_results:
@@ -783,6 +911,11 @@ def answer_general_question(
                 "route": route,
                 "confidence_level": CONFIDENCE_BY_ROUTE[route],
             }
+
+    # Firm Search mode: the firm's documents had nothing relevant, and this
+    # mode never falls back to the web or the model's general knowledge.
+    if firm_only:
+        return firm_not_found_result()
 
     if is_public:
         if explicit_web or allow_web_search:

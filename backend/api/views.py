@@ -49,7 +49,7 @@ from rag.document_intelligence import (
     summarize_document,
 )
 from rag.document_processor import extract_text_from_document
-from rag.rag_pipeline import process_uploaded_document, answer_question, answer_general_question
+from rag.rag_pipeline import process_uploaded_document, answer_question, answer_general_question, answer_web_only
 from rag.research_agent import run_research_agent, run_agent
 from rag.vector_store import delete_document_chunks
 
@@ -293,6 +293,17 @@ def ask_question(request, payload: AskQuestionSchema):
             "error": "Question is required."
         }
 
+    # Top-level source switch (see AskQuestionSchema.search_mode). "web" mode
+    # answers from general knowledge / web only and ignores ALL firm data -
+    # including any attached document - so drop document_id here so the
+    # document lookup and every firm-scoped branch below is skipped.
+    search_mode = (payload.search_mode or "firm").strip().lower()
+    if search_mode not in ("firm", "web"):
+        search_mode = "firm"
+    firm_only = search_mode == "firm"
+    if search_mode == "web":
+        document_id = None
+
     document = None
 
     if document_id:
@@ -403,8 +414,9 @@ def ask_question(request, payload: AskQuestionSchema):
         # When the conversation is already scoped to one specific case, routing
         # always goes to the case-aware agent - so the router call would be
         # wasted. Only run it when a top-level routing decision is actually
-        # needed (no active case).
-        if not effective_case_id:
+        # needed (no active case). Web Search mode ignores firm data entirely,
+        # so the firm-stats/intent classifier is skipped there too.
+        if search_mode != "web" and not effective_case_id:
             from rag.groq_client import classify_intent
 
             classification = classify_intent(
@@ -425,7 +437,16 @@ def ask_question(request, payload: AskQuestionSchema):
                     stats_query_text, request.auth.firm, classification=classification
                 )
 
-        if clarification is not None:
+        if search_mode == "web":
+            # Web Search mode: answer from general knowledge / web only,
+            # ignoring every firm source (documents, cases, history).
+            result = answer_web_only(
+                question=question,
+                answer_mode=payload.answer_mode,
+                history=history,
+                region=payload.region or request.auth.firm.default_region,
+            )
+        elif clarification is not None:
             result = {
                 "answer": clarification,
                 "sources": [],
@@ -458,6 +479,7 @@ def ask_question(request, payload: AskQuestionSchema):
                 answer_mode=payload.answer_mode,
                 region=payload.region or request.auth.firm.default_region,
                 history=history,
+                firm_only=firm_only,
             )
         elif document is not None:
             if payload.use_agent:
@@ -467,6 +489,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     firm_id=document.firm_id,
                     allow_web_search=payload.allow_web_search,
                     answer_mode=payload.answer_mode,
+                    firm_only=firm_only,
                 )
             else:
                 result = answer_question(
@@ -478,6 +501,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     answer_mode=payload.answer_mode,
                     history=history,
                     region=payload.region or request.auth.firm.default_region,
+                    firm_only=firm_only,
                 )
         else:
             # No document selected and not a stats question - search the
@@ -490,6 +514,7 @@ def ask_question(request, payload: AskQuestionSchema):
                 answer_mode=payload.answer_mode,
                 history=history,
                 region=payload.region or request.auth.firm.default_region,
+                firm_only=firm_only,
             )
 
         if result.get("needs_web_confirmation"):

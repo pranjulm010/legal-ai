@@ -20,6 +20,7 @@ import {
   type ChatSessionListItem,
   type ResearchStep,
   type ResponseMode,
+  type SearchMode,
   type UploadDocumentResponse,
 } from "@/lib/api";
 
@@ -84,6 +85,30 @@ const ANSWER_MODES: {
     desc: "For lawyers/professionals",
   },
 ];
+
+const SEARCH_MODES: {
+  value: SearchMode;
+  label: string;
+  icon: string;
+  desc: string;
+}[] = [
+  {
+    value: "firm",
+    label: "Firm Search",
+    icon: "🏛️",
+    desc: "Answers only from your firm's documents, cases, and history",
+  },
+  {
+    value: "web",
+    label: "Web Search",
+    icon: "🌐",
+    desc: "Answers from general knowledge / the web, ignoring firm data",
+  },
+];
+
+function getSearchModeLabel(mode: SearchMode) {
+  return SEARCH_MODES.find((m) => m.value === mode)?.label || "Firm Search";
+}
 
 const SUGGESTED_QUESTIONS = [
   { text: "My phone was stolen. What legal steps should I take now?", icon: "📱" },
@@ -279,6 +304,10 @@ export default function LexoraLegalChatPage() {
   // Answer mode is fixed to "plain" - the Plain/Mixed/Expert picker was
   // removed from the UI, but the backend still expects a valid mode.
   const [answerMode] = useState<AnswerMode>("plain");
+  // Source mode: "firm" (default) answers only from the firm's own records;
+  // "web" ignores firm data and answers from general knowledge / web search.
+  // The user can switch at any time; it applies to every subsequent query.
+  const [searchMode, setSearchMode] = useState<SearchMode>("firm");
 
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentName, setDocumentName] = useState<string | null>(null);
@@ -521,6 +550,7 @@ export default function LexoraLegalChatPage() {
         sessionId: "default-session",
         userType: answerMode === "expert" ? "lawyer" : "public",
         mode: backendMode,
+        searchMode,
         documentId,
         caseId: selectedCaseId,
         useAgent,
@@ -590,7 +620,7 @@ export default function LexoraLegalChatPage() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   },
-  [answerMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
+  [answerMode, searchMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
 );
 
   const respondToWebConfirm = useCallback(
@@ -625,6 +655,7 @@ export default function LexoraLegalChatPage() {
           sessionId: "default-session",
           userType: answerMode === "expert" ? "lawyer" : "public",
           mode: toBackendMode(answerMode),
+          searchMode,
           documentId,
           caseId: selectedCaseId,
           allowWebSearch: true,
@@ -670,7 +701,7 @@ export default function LexoraLegalChatPage() {
         setLoading(false);
       }
     },
-    [answerMode, documentId, documentName, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
+    [answerMode, searchMode, documentId, documentName, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
   );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1253,18 +1284,50 @@ export default function LexoraLegalChatPage() {
                 </Link>
               )}
 
-              <span
+              <div
+                role="group"
+                aria-label="Answer source mode"
+                title={SEARCH_MODES.find((m) => m.value === searchMode)?.desc}
                 style={{
-                  padding: "5px 10px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 2,
+                  padding: 3,
                   borderRadius: 999,
-                  background: "rgba(201,169,110,0.08)",
-                  border: "1px solid rgba(201,169,110,0.14)",
-                  color: "#c9a96e",
-                  fontSize: 11,
+                  background: "rgba(201,169,110,0.06)",
+                  border: "1px solid rgba(201,169,110,0.16)",
                 }}
               >
-                {getModeLabel(answerMode)}
-              </span>
+                {SEARCH_MODES.map((m) => {
+                  const active = searchMode === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => setSearchMode(m.value)}
+                      aria-pressed={active}
+                      title={m.desc}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        padding: "5px 12px",
+                        borderRadius: 999,
+                        border: "none",
+                        cursor: "pointer",
+                        fontSize: 11,
+                        fontWeight: active ? 700 : 500,
+                        background: active ? "#c9a96e" : "transparent",
+                        color: active ? "#1a0e00" : "#8a7c68",
+                        transition: "0.15s ease",
+                      }}
+                    >
+                      <span aria-hidden>{m.icon}</span>
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </header>
 
@@ -1739,7 +1802,13 @@ export default function LexoraLegalChatPage() {
                   flexWrap: "wrap",
                 }}
               >
-                <span>Current: {getModeLabel(answerMode)}</span>
+                <span>
+                  {SEARCH_MODES.find((m) => m.value === searchMode)?.icon}{" "}
+                  {getSearchModeLabel(searchMode)}
+                  {searchMode === "firm"
+                    ? " · firm records only"
+                    : " · general knowledge / web"}
+                </span>
                 <span>Enter to send</span>
               </div>
             </div>

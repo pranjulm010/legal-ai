@@ -81,6 +81,14 @@ class AskQuestionSchema(Schema):
     user_type: str = "public"
     answer_mode: str = "plain_english"
     document_type: Optional[str] = None
+    # Top-level source switch:
+    #   "firm" (default) - answer ONLY from the firm's own records (uploaded
+    #     documents, case files, history); never web or general LLM knowledge.
+    #     If nothing relevant is found, say so politely.
+    #   "web"  - ignore all firm data entirely; answer from general knowledge
+    #     / web search only.
+    # Distinct from answer_mode (which controls the answer's style/register).
+    search_mode: str = "firm"
     allow_web_search: bool = False
     use_agent: bool = False
     use_advanced_agent: bool = True

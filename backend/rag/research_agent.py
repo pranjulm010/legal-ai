@@ -30,6 +30,7 @@ from .rag_pipeline import (
     _best_distance,
     build_context,
     build_web_context,
+    FIRM_ONLY_NOT_FOUND_MESSAGE,
     out_of_scope_answer,
 )
 from .retriever import retrieve_context
@@ -164,6 +165,7 @@ def run_research_agent(
     firm_id: int,
     allow_web_search: bool = False,
     answer_mode: str = "mixed",
+    firm_only: bool = False,
 ) -> Dict:
     """
     Multi-step research: decomposes the question, resolves each
@@ -212,6 +214,30 @@ def run_research_agent(
             })
         else:
             unresolved.append(sub_question)
+
+    if firm_only:
+        # Firm Search mode: never web, never general knowledge. Answer from
+        # whatever the firm's document resolved; if nothing resolved at all,
+        # say plainly that nothing relevant was found. Any sub-questions the
+        # document couldn't answer are marked unresolved (not pending_web).
+        if not step_results:
+            return {
+                "answer": FIRM_ONLY_NOT_FOUND_MESSAGE,
+                "sources": [],
+                "needs_web_confirmation": False,
+                "research_steps": [
+                    {"sub_question": sq, "source_type": "unresolved", "resolved": False}
+                    for sq in unresolved
+                ],
+            }
+        for sq in unresolved:
+            step_results.append({
+                "sub_question": sq,
+                "source_type": "unresolved",
+                "context": "No relevant information found in the firm's records.",
+                "sources": [],
+            })
+        unresolved = []
 
     if unresolved and not allow_web_search:
         resolved_steps = [
@@ -403,7 +429,7 @@ def _is_weak_document_match(search_result: Dict) -> bool:
     return best_score > strong_cutoff
 
 
-def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = None, document_id: Optional[str] = None) -> List[Dict]:
+def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = None, document_id: Optional[str] = None, firm_only: bool = False) -> List[Dict]:
     """
     The set of tools offered to the model is the actual safety boundary -
     not a text instruction the model might ignore. A tool that isn't in
@@ -425,7 +451,12 @@ def _build_tools(role: str, allow_web_search: bool, case_id: Optional[int] = Non
     is_public = role == "public"
 
     tools = [SEARCH_DOCUMENTS_TOOL]
-    tools.append(SEARCH_WEB_TOOL if allow_web_search else REQUEST_WEB_SEARCH_TOOL)
+    # Firm Search mode answers strictly from the firm's own records, so no web
+    # tool is offered at all - not even request_web_search (which would prompt
+    # the user to search the web). Since the tool set is the real boundary, the
+    # model simply cannot reach for the web in this mode.
+    if not firm_only:
+        tools.append(SEARCH_WEB_TOOL if allow_web_search else REQUEST_WEB_SEARCH_TOOL)
 
     if not is_public:
         tools.append(COMPARE_DOCUMENTS_TOOL)
@@ -723,6 +754,7 @@ def run_agent(
     answer_mode: str = "mixed",
     region: str = "india",
     history: Optional[List[Dict]] = None,
+    firm_only: bool = False,
 ) -> Dict:
     """
     Tool-calling research agent: the model decides, turn by turn, which
@@ -739,7 +771,7 @@ def run_agent(
     rather than silently searching or silently refusing.
     """
     client = get_groq_client()
-    tools = _build_tools(role, allow_web_search, case_id, document_id)
+    tools = _build_tools(role, allow_web_search, case_id, document_id, firm_only=firm_only)
 
     system_prompt = f"""
 You are an Indian legal AI assistant for a specific law firm, with access
@@ -1166,8 +1198,12 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
                 for step in research_steps
             )
             if not grounded and not allow_web_search and not document_id and not case_id:
+                # Firm Search mode never answers from general knowledge - say
+                # plainly that nothing relevant was in the firm's records
+                # instead of falling back to out_of_scope_answer (which would).
                 return {
-                    "answer": out_of_scope_answer(effective_question, answer_mode, history),
+                    "answer": FIRM_ONLY_NOT_FOUND_MESSAGE if firm_only
+                    else out_of_scope_answer(effective_question, answer_mode, history),
                     "sources": sources,
                     "needs_web_confirmation": False,
                     "research_steps": research_steps,
@@ -1252,8 +1288,12 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
                 arguments = {}
 
             if name == "request_web_search":
+                # firm_only never offers this tool, so this is effectively
+                # unreachable there - but guard anyway so the mode can never
+                # leak a general-knowledge answer.
                 return {
-                    "answer": out_of_scope_answer(effective_question, answer_mode, history),
+                    "answer": FIRM_ONLY_NOT_FOUND_MESSAGE if firm_only
+                    else out_of_scope_answer(effective_question, answer_mode, history),
                     "sources": [],
                     "needs_web_confirmation": False,
                     "research_steps": research_steps

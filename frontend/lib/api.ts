@@ -87,12 +87,17 @@ export type UserType = "public" | "lawyer";
 
 export type ResponseMode = "plain_english" | "mixed" | "professional";
 
+// Top-level source switch: "firm" answers only from the firm's own records;
+// "web" ignores firm data and answers from general knowledge / web search.
+export type SearchMode = "firm" | "web";
+
 export interface SendMessagePayload {
   question: string;
   userId?: string;
   sessionId?: string;
   userType?: UserType;
   mode?: ResponseMode;
+  searchMode?: SearchMode;
   documentId?: string | null;
   documentType?: string | null;
   caseId?: number | null;
@@ -195,6 +200,7 @@ export const sendMessage = async ({
   sessionId = "default-session",
   userType = "public",
   mode = "plain_english",
+  searchMode = "firm",
   documentId,
   documentType,
   caseId = null,
@@ -210,6 +216,7 @@ export const sendMessage = async ({
     session_id: sessionId,
     user_type: userType,
     answer_mode: mode,
+    search_mode: searchMode,
     document_id: documentId || null,
     document_type: documentType || null,
     case_id: caseId || null,
