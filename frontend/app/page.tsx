@@ -61,6 +61,21 @@ const FEATURES = [
     title: "Drafting & Redlining",
     desc: "Generate and compare agreements, notices, and petitions that mirror your firm's own templates.",
   },
+  {
+    icon: "☁️",
+    title: "Google Drive Sync",
+    desc: "Connect a Drive folder and auto-sync PDFs, Word files, Google Docs, Slides, and Sheets straight into your firm's knowledge base.",
+  },
+  {
+    icon: "✏️",
+    title: "Edit & Refine Documents",
+    desc: "Correct extracted text in-app — your edits are re-indexed so every future answer reasons over the clean, verified version.",
+  },
+  {
+    icon: "🏛️",
+    title: "Firm-wide Workspace",
+    desc: "Documents, chat sessions, and cases are shared across your firm, so any lawyer can pick up exactly where a colleague left off.",
+  },
 ];
 
 const BENEFITS = [
@@ -160,11 +175,11 @@ const PRICING = [
     target: "Mid-size firms · Legal teams",
     features: [
       "Team usage & seats",
+      "Google Drive folder sync",
+      "Firm-wide shared workspace",
       "Bulk document analysis",
       "Advanced guardrails",
       "Confidence scoring",
-      "Billing & usage tracking",
-      "Longer history retention",
     ],
     cta: "Get Started",
     highlight: false,
@@ -176,11 +191,11 @@ const PRICING = [
     target: "Corporates · Large firms",
     features: [
       "Custom deployment",
+      "Bring-your-own LLM model & keys",
       "SSO & RBAC",
       "Audit logs",
       "Custom legal sources",
       "Dedicated support",
-      "Enterprise integrations",
     ],
     cta: "Book a Demo",
     highlight: false,
@@ -233,7 +248,7 @@ const FAQS = [
   },
   {
     q: "Can it work with my firm's own documents?",
-    a: "Yes. Upload FIRs, contracts, judgments, notices, and court orders. The OCR + RAG pipeline extracts, embeds, and reasons over them so answers reflect your actual case files — and drafts mirror your own templates.",
+    a: "Yes. Upload FIRs, contracts, judgments, notices, and court orders, or connect a Google Drive folder to auto-sync PDFs, Word files, Google Docs, Slides, and Sheets. The OCR + RAG pipeline extracts, embeds, and reasons over them; you can edit any extracted text in-app to correct it, and everything is shared firm-wide so your whole team works from the same case files.",
   },
   {
     q: "Which languages are supported?",
