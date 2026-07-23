@@ -1191,10 +1191,26 @@ must be given exactly as quoted in the SCOPE section, with nothing added.
             # it. The document_id/case_id system-prompt blocks already tell
             # the model to say plainly when the attached document genuinely
             # doesn't contain the answer.
+            # The weak_grounding exclusion exists to route a boilerplate
+            # near-miss (a match that squeaked under the 0.72 answer-relevance
+            # threshold but is above the 0.55 strong-grounding cutoff) to a web
+            # search instead of answering from a tenuous match. In Firm Search
+            # mode there is no web fallback for it to route to, and the match
+            # already passed the answer-relevance threshold (that is what makes
+            # search_documents report found=True), so treating it as "not
+            # grounded" turns a genuine firm answer into a hard "nothing found"
+            # refusal - reproduced live: a firm document literally stating "My
+            # name Suman Sutradhar, lives in siliguri..." matched "who is suman"
+            # at distance 0.63 (< 0.72, > 0.55) and was wrongly refused, even
+            # though the deterministic pipeline answers the same question from
+            # the same document. The model's own STEP 4 / reflection checks
+            # already guard against answering off a truly irrelevant chunk, so
+            # in firm_only mode an answer-relevant firm match counts as grounded
+            # regardless of the strong-grounding cutoff.
             grounded = any(
                 step.get("resolved")
                 and step.get("source_type") in ("document", "case", "compare", "web", "draft")
-                and not step.get("weak_grounding")
+                and (firm_only or not step.get("weak_grounding"))
                 for step in research_steps
             )
             if not grounded and not allow_web_search and not document_id and not case_id:
