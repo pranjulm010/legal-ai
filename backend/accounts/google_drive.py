@@ -1,9 +1,11 @@
 """
 Google Drive integration - lets a firm link a shared Drive folder so its
-PDFs get indexed into the same per-firm RAG collection as manually
-uploaded documents. Tokens are stored per-firm (see GoogleDriveConnection
-docstring in models.py) since the linked folder is a shared firm
-resource, not a personal one.
+documents get indexed into the same per-firm RAG collection as manually
+uploaded documents. Every file type the document processor understands
+(PDFs, Word, PowerPoint, plain text/markdown, images) is synced, not just
+PDFs. Tokens are stored per-firm (see GoogleDriveConnection docstring in
+models.py) since the linked folder is a shared firm resource, not a
+personal one.
 
 OAuth flow:
 1. Frontend calls GET .../connect/ (authenticated) -> gets a Google
@@ -13,7 +15,7 @@ OAuth flow:
    .../callback/, a plain Django view that recovers firm/lawyer from the
    signed state and exchanges the code for tokens.
 3. Frontend then calls POST .../folder/ with a pasted folder link to
-   select which folder to sync, and POST .../sync/ to index its PDFs.
+   select which folder to sync, and POST .../sync/ to index its files.
 """
 
 import re
@@ -43,6 +45,43 @@ from .permissions import require_permission
 SIGNING_SALT = "google-drive-oauth-state"
 FOLDER_LINK_RE = re.compile(r"/folders/([a-zA-Z0-9_-]+)")
 FOLDER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{10,}$")
+
+# Binary Drive files we know how to index, each mapped to the local
+# document_type the RAG pipeline expects. These are ordinary "uploaded"
+# files, so get_media downloads their bytes directly. Keep it aligned with
+# SUPPORTED_DOCUMENT_TYPES / extract_text_from_document: every value here
+# must be a type the document processor can extract text from. Images
+# (jpg/png) are deliberately excluded even though the processor can OCR
+# them - Drive sync is for documents only.
+DRIVE_MIME_TYPE_TO_DOCUMENT_TYPE = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "text/plain": "txt",
+    "text/markdown": "md",
+}
+
+# Google-native files (Docs/Sheets/Slides) aren't stored as downloadable
+# bytes - get_media fails on them, so they must be exported to a concrete
+# format via export_media. Map each native MIME type to (export_mime_type,
+# document_type): Docs -> DOCX, Slides -> PPTX, and Sheets -> CSV (which the
+# processor reads as plain text - there's no spreadsheet extractor, and CSV
+# keeps the cell data searchable). export_media only exports the first sheet
+# of a spreadsheet and caps at ~10MB, which is fine for indexing.
+DRIVE_NATIVE_EXPORT = {
+    "application/vnd.google-apps.document": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "docx",
+    ),
+    "application/vnd.google-apps.presentation": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "pptx",
+    ),
+    "application/vnd.google-apps.spreadsheet": (
+        "text/csv",
+        "txt",
+    ),
+}
 
 
 def _client_config():
@@ -297,9 +336,14 @@ def sync_folder(request):
     errors: List[str] = []
 
     # A linked folder narrows the search to just that folder; otherwise
-    # every PDF the connected account can see is fair game - the user
-    # explicitly chose "search my whole Drive" over folder scoping.
-    query = "mimeType='application/pdf' and trashed=false"
+    # every supported file the connected account can see is fair game - the
+    # user explicitly chose "search my whole Drive" over folder scoping.
+    # Restrict server-side to the MIME types we can actually index (both the
+    # binary types and the Google-native types we export) so we never
+    # download files the processor would reject.
+    indexable_mime_types = list(DRIVE_MIME_TYPE_TO_DOCUMENT_TYPE) + list(DRIVE_NATIVE_EXPORT)
+    mime_clause = " or ".join(f"mimeType='{mime_type}'" for mime_type in indexable_mime_types)
+    query = f"({mime_clause}) and trashed=false"
     if connection.folder_id:
         query = f"'{connection.folder_id}' in parents and {query}"
 
@@ -310,7 +354,7 @@ def sync_folder(request):
         while True:
             response = service.files().list(
                 q=query,
-                fields="nextPageToken, files(id,name,modifiedTime)",
+                fields="nextPageToken, files(id,name,mimeType,modifiedTime)",
                 pageSize=200,
                 pageToken=page_token,
             ).execute()
@@ -326,6 +370,21 @@ def sync_folder(request):
         file_name = drive_file["name"]
         modified_time = parse_datetime(drive_file.get("modifiedTime", "")) if drive_file.get("modifiedTime") else None
 
+        # Resolve how to fetch this file and what document_type to stamp on
+        # it. Binary files download directly; Google-native files export to
+        # a concrete format first. The listing query already restricts to
+        # indexable MIME types, so one of these normally always matches;
+        # guard anyway in case Drive returns a type we didn't ask for.
+        mime_type = drive_file.get("mimeType", "")
+        export_mime = None
+        if mime_type in DRIVE_MIME_TYPE_TO_DOCUMENT_TYPE:
+            document_type = DRIVE_MIME_TYPE_TO_DOCUMENT_TYPE[mime_type]
+        elif mime_type in DRIVE_NATIVE_EXPORT:
+            export_mime, document_type = DRIVE_NATIVE_EXPORT[mime_type]
+        else:
+            skipped += 1
+            continue
+
         existing = UploadedDocument.objects.filter(
             firm=request.auth.firm, drive_file_id=drive_file_id
         ).first()
@@ -340,7 +399,12 @@ def sync_folder(request):
             continue
 
         try:
-            content = service.files().get_media(fileId=drive_file_id).execute()
+            if export_mime:
+                content = service.files().export_media(
+                    fileId=drive_file_id, mimeType=export_mime
+                ).execute()
+            else:
+                content = service.files().get_media(fileId=drive_file_id).execute()
         except HttpError as error:
             errors.append(f"{file_name}: could not download ({error})")
             continue
@@ -348,13 +412,14 @@ def sync_folder(request):
         if existing:
             existing.file.save(file_name, ContentFile(content), save=False)
             existing.original_name = file_name
+            existing.document_type = document_type
             existing.drive_modified_at = modified_time
             existing.save()
             document = existing
         else:
             document = UploadedDocument.objects.create(
                 original_name=file_name,
-                document_type="pdf",
+                document_type=document_type,
                 firm=request.auth.firm,
                 source="drive",
                 drive_file_id=drive_file_id,
