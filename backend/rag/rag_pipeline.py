@@ -135,7 +135,10 @@ def process_uploaded_document(document) -> int:
     document_id = str(document.document_id)
     document_type = document.document_type
 
-    extracted_text = extract_text_from_document(
+    # An in-app edit stores the new content on the document as a
+    # non-destructive override; when present it's the source of truth for
+    # chunking/embedding rather than re-extracting the untouched original file.
+    extracted_text = getattr(document, "edited_text", "") or extract_text_from_document(
         file_path=file_path,
         document_type=document_type
     )

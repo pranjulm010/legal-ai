@@ -1208,6 +1208,39 @@ export const updateDocumentTags = async (
   return response.data;
 };
 
+export const renameDocument = async (
+  documentId: string,
+  fileName: string
+): Promise<DocumentListItem> => {
+  const response = await api.patch(`/documents/${documentId}/rename/`, {
+    file_name: fileName,
+  });
+  return response.data;
+};
+
+export interface DocumentContent {
+  document_id: string;
+  file_name: string;
+  document_type: string;
+  content: string;
+  edited: boolean;
+}
+
+export const getDocumentContent = async (
+  documentId: string
+): Promise<DocumentContent> => {
+  const response = await api.get(`/documents/${documentId}/content/`);
+  return response.data;
+};
+
+export const updateDocumentContent = async (
+  documentId: string,
+  content: string
+): Promise<DocumentContent> => {
+  const response = await api.put(`/documents/${documentId}/content/`, { content });
+  return response.data;
+};
+
 export const summarizeDocument = async (documentId: string): Promise<string> => {
   const response = await api.post(`/documents/${documentId}/summarize/`);
   return response.data.summary;

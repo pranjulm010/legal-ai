@@ -35,6 +35,14 @@ class UploadedDocument(models.Model):
     tags = models.CharField(max_length=500, blank=True, default="", help_text="Comma-separated")
     extracted_entities = models.JSONField(default=dict, blank=True)
 
+    # When an admin/partner edits a document's content in-app, the original
+    # binary file (PDF/DOCX/etc.) can't be faithfully round-tripped, so the
+    # edited plain text is stored here as a non-destructive override instead
+    # of overwriting the source file. Once set, it becomes the source of
+    # truth for chunking/embedding and every text-reading feature
+    # (summarize/risks/compare/etc.); empty means "use the original file".
+    edited_text = models.TextField(blank=True, default="")
+
     case = models.ForeignKey(
         "cases.Case",
         on_delete=models.SET_NULL,

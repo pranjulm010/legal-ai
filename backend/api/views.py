@@ -27,7 +27,10 @@ from .schemas import (
     CompareDocumentsSchema,
     CompareResultSchema,
     ComplianceCheckSchema,
+    DocumentContentSchema,
+    DocumentContentUpdateSchema,
     DocumentListItemSchema,
+    DocumentRenameSchema,
     DocumentStatusSchema,
     DocumentSummarySchema,
     DocumentTagsUpdateSchema,
@@ -809,6 +812,159 @@ def update_document_tags(request, document_id: str, payload: DocumentTagsUpdateS
     }
 
 
+@api.patch(
+    "/documents/{document_id}/rename/",
+    auth=JWTAuth(),
+    response={
+        200: DocumentListItemSchema,
+        400: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+    },
+)
+def rename_document(request, document_id: str, payload: DocumentRenameSchema):
+    document, error = _get_owned_document(request, document_id)
+    if error:
+        return error
+
+    denied = require_permission(request, "edit_document")
+    if denied:
+        return denied
+
+    new_name = payload.file_name.strip()
+    if not new_name:
+        return 400, {"error": "Document name cannot be empty."}
+
+    old_name = document.original_name
+    document.original_name = new_name
+    document.save(update_fields=["original_name"])
+
+    log_audit_event(
+        firm=request.auth.firm,
+        actor=request.auth,
+        action="document_renamed",
+        details=f"Renamed document: {old_name} -> {new_name}",
+    )
+
+    return 200, {
+        "document_id": str(document.document_id),
+        "file_name": document.original_name,
+        "document_type": document.document_type,
+        "tags": document.tags,
+        "case_id": document.case_id,
+        "case_title": document.case.title if document.case_id else None,
+        "uploaded_at": document.uploaded_at,
+        "source": document.source,
+        "status": document.status,
+        "version_number": document.version_number,
+    }
+
+
+@api.get(
+    "/documents/{document_id}/content/",
+    auth=JWTAuth(),
+    response={
+        200: DocumentContentSchema,
+        400: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+    },
+)
+def get_document_content(request, document_id: str):
+    """
+    Returns the document's full editable text - the in-app edited override
+    if one exists, otherwise the complete text extracted from the original
+    file (uncapped, unlike _read_document_text, since the whole document
+    has to be shown for editing).
+    """
+    document, error = _get_owned_document(request, document_id)
+    if error:
+        return error
+
+    if document.edited_text:
+        content = document.edited_text
+        edited = True
+    else:
+        try:
+            content = extract_text_from_document(
+                file_path=document.file.path,
+                document_type=document.document_type,
+            )
+        except (FileNotFoundError, ValueError) as read_error:
+            return 400, {"error": f"Could not read document for editing: {read_error}"}
+        edited = False
+
+    return 200, {
+        "document_id": str(document.document_id),
+        "file_name": document.original_name,
+        "document_type": document.document_type,
+        "content": content,
+        "edited": edited,
+    }
+
+
+@api.put(
+    "/documents/{document_id}/content/",
+    auth=JWTAuth(),
+    response={
+        200: DocumentContentSchema,
+        400: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+    },
+)
+def update_document_content(request, document_id: str, payload: DocumentContentUpdateSchema):
+    """
+    Saves an in-app content edit as a non-destructive override on the
+    document (the original file is left untouched) and re-chunks/re-embeds
+    from the new text so search and the AI features reflect the edit. The
+    re-embedding runs in the background, so the document goes to
+    "processing" until it finishes, exactly like a fresh upload.
+    """
+    document, error = _get_owned_document(request, document_id)
+    if error:
+        return error
+
+    denied = require_permission(request, "edit_document")
+    if denied:
+        return denied
+
+    content = payload.content.strip()
+    if not content:
+        return 400, {"error": "Document content cannot be empty."}
+
+    document.edited_text = content
+    document.status = "processing"
+    document.error_message = ""
+    document.save(update_fields=["edited_text", "status", "error_message"])
+
+    # Drop the old chunks now so a failed/slow re-embed can never leave the
+    # pre-edit text searchable alongside the new text; the background pass
+    # then re-stores from edited_text (see process_uploaded_document).
+    delete_document_chunks(document_id=str(document.document_id), firm_id=document.firm_id)
+
+    threading.Thread(
+        target=_process_document_in_background,
+        args=(document.id,),
+        daemon=True,
+    ).start()
+
+    log_audit_event(
+        firm=request.auth.firm,
+        actor=request.auth,
+        action="document_content_edited",
+        details=f"Edited content of document: {document.original_name}",
+    )
+
+    return 200, {
+        "document_id": str(document.document_id),
+        "file_name": document.original_name,
+        "document_type": document.document_type,
+        "content": document.edited_text,
+        "edited": True,
+    }
+
+
 def _get_owned_document(request, document_id: str):
     """Shared lookup + firm-ownership check for the document-intelligence
     endpoints below. Returns (document, None) or (None, (status, body))."""
@@ -861,6 +1017,13 @@ def _read_document_text(document: UploadedDocument) -> str:
     # call that only ever used the first 12000 of them, long enough for
     # the dev proxy to give up and reset the connection before Django
     # could even respond.
+    #
+    # An in-app content edit is stored as edited_text on the document; when
+    # present it's the authoritative text, so read it (capped the same way)
+    # instead of re-extracting the untouched original file.
+    if document.edited_text:
+        return document.edited_text[:MAX_DOCUMENT_CHARS]
+
     return extract_text_from_document(
         file_path=document.file.path,
         document_type=document.document_type,

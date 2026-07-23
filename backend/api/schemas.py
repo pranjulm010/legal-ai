@@ -53,6 +53,25 @@ class DocumentTagsUpdateSchema(Schema):
     tags: str
 
 
+class DocumentRenameSchema(Schema):
+    file_name: str
+
+
+class DocumentContentSchema(Schema):
+    """The document's current editable text and whether it has been edited
+    in-app (vs. still reflecting the original uploaded file)."""
+
+    document_id: str
+    file_name: str
+    document_type: str
+    content: str
+    edited: bool
+
+
+class DocumentContentUpdateSchema(Schema):
+    content: str
+
+
 class AskQuestionSchema(Schema):
     question: str
     document_id: Optional[str] = None
