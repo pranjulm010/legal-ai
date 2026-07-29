@@ -32,6 +32,15 @@ class UploadedDocument(models.Model):
     total_chunks = models.IntegerField(default=0)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
+    # SHA-256 of the uploaded file's bytes, used to reject re-uploading the
+    # exact same file into the same firm (which would otherwise create
+    # duplicate chunks/embeddings that pollute retrieval - the same file being
+    # uploaded twice is what made a "who is X" answer see only one of the
+    # person's matters). Empty on pre-existing rows and on Drive-synced docs
+    # (those dedupe by drive_file_id instead); a genuinely new version has
+    # different bytes and therefore a different hash, so versioning still works.
+    content_hash = models.CharField(max_length=64, blank=True, default="", db_index=True)
+
     tags = models.CharField(max_length=500, blank=True, default="", help_text="Comma-separated")
     extracted_entities = models.JSONField(default=dict, blank=True)
 

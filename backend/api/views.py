@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 from typing import List, Optional
 
+import groq
 from ninja import NinjaAPI, File, Form
 from ninja.files import UploadedFile
 import requests
@@ -49,7 +50,7 @@ from rag.document_intelligence import (
     summarize_document,
 )
 from rag.document_processor import extract_text_from_document
-from rag.rag_pipeline import process_uploaded_document, answer_question, answer_general_question, answer_web_only
+from rag.rag_pipeline import process_uploaded_document, answer_question, answer_general_question
 from rag.research_agent import run_research_agent, run_agent
 from rag.vector_store import delete_document_chunks
 
@@ -174,6 +175,7 @@ def _process_document_in_background(document_id: int) -> None:
     response={
         201: UploadDocumentResponseSchema,
         400: ErrorResponseSchema,
+        409: ErrorResponseSchema,
         429: ErrorResponseSchema,
         500: ErrorResponseSchema,
     },
@@ -212,6 +214,38 @@ def upload_document(
     if validation_error:
         return 400, {"error": validation_error}
 
+    # Reject re-uploading the exact same file into the same firm. Hashing the
+    # bytes (not the filename) catches a duplicate even when it's renamed, and
+    # lets a genuinely different/updated file through (different bytes ->
+    # different hash). This keeps duplicate chunks out of retrieval at the
+    # source. Read in chunks so a large file isn't loaded fully into memory,
+    # then rewind so the FileField still saves the complete content.
+    import hashlib
+
+    file.seek(0)
+    hasher = hashlib.sha256()
+    for chunk in file.chunks():
+        hasher.update(chunk)
+    content_hash = hasher.hexdigest()
+    file.seek(0)
+
+    existing = (
+        UploadedDocument.objects.filter(
+            firm=request.auth.firm, content_hash=content_hash
+        )
+        .exclude(status="failed")
+        .order_by("uploaded_at")
+        .first()
+    )
+    if existing is not None:
+        return 409, {
+            "error": (
+                f'This file is already in your knowledge base as '
+                f'"{existing.original_name}", so it wasn\'t uploaded again. '
+                f"If you meant to replace it, delete the existing one first."
+            ),
+        }
+
     try:
         document = UploadedDocument.objects.create(
             file=file,
@@ -220,6 +254,7 @@ def upload_document(
             case_id=case_id or None,
             firm=request.auth.firm,
             status="processing",
+            content_hash=content_hash,
         )
     except Exception as error:
         print("UPLOAD DOCUMENT ERROR:", error)
@@ -293,16 +328,15 @@ def ask_question(request, payload: AskQuestionSchema):
             "error": "Question is required."
         }
 
-    # Top-level source switch (see AskQuestionSchema.search_mode). "web" mode
-    # answers from general knowledge / web only and ignores ALL firm data -
-    # including any attached document - so drop document_id here so the
-    # document lookup and every firm-scoped branch below is skipped.
-    search_mode = (payload.search_mode or "firm").strip().lower()
-    if search_mode not in ("firm", "web"):
-        search_mode = "firm"
-    firm_only = search_mode == "firm"
-    if search_mode == "web":
-        document_id = None
+    # Retrieval always follows the firm-first priority pipeline: search the
+    # firm's own knowledge base first, then fall through automatically to
+    # trusted/web sources, and only then to the model's general knowledge.
+    # Selecting the source is the engine's job, not the user's - there is no
+    # manual firm/web toggle, and the web step no longer waits for a
+    # confirmation click (allow_web_search is always on so the fallthrough is
+    # automatic).
+    firm_only = False
+    allow_web_search = True
 
     document = None
 
@@ -349,9 +383,29 @@ def ask_question(request, payload: AskQuestionSchema):
     history = None
     if session is not None:
         prior = list(
-            session.messages.order_by("created_at").values("question", "answer")[:20]
+            session.messages.order_by("created_at").values("question", "answer")
         )
-        history = prior or None
+        if prior:
+            # Only carry the last few turns, with long answers truncated, into
+            # the model's context. The default agent's system prompt is already
+            # large relative to the model's per-request token budget, so an
+            # unbounded conversation (a full web-search answer is easily 1-2k
+            # tokens each) blows the limit and makes a mid-conversation question
+            # fail while the same question in a fresh chat succeeds. A few
+            # recent, truncated turns are enough for follow-ups like "explain
+            # that" without pushing the request over the limit.
+            recent = prior[-4:]
+            history = [
+                {
+                    "question": (turn["question"] or "")[:500],
+                    "answer": (
+                        (turn["answer"][:700] + " …")
+                        if turn["answer"] and len(turn["answer"]) > 700
+                        else (turn["answer"] or "")
+                    ),
+                }
+                for turn in recent
+            ]
 
     try:
         # Meta-questions about the firm's own data ("how many lawyers",
@@ -414,9 +468,8 @@ def ask_question(request, payload: AskQuestionSchema):
         # When the conversation is already scoped to one specific case, routing
         # always goes to the case-aware agent - so the router call would be
         # wasted. Only run it when a top-level routing decision is actually
-        # needed (no active case). Web Search mode ignores firm data entirely,
-        # so the firm-stats/intent classifier is skipped there too.
-        if search_mode != "web" and not effective_case_id:
+        # needed (no active case).
+        if not effective_case_id:
             from rag.groq_client import classify_intent
 
             classification = classify_intent(
@@ -437,16 +490,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     stats_query_text, request.auth.firm, classification=classification
                 )
 
-        if search_mode == "web":
-            # Web Search mode: answer from general knowledge / web only,
-            # ignoring every firm source (documents, cases, history).
-            result = answer_web_only(
-                question=question,
-                answer_mode=payload.answer_mode,
-                history=history,
-                region=payload.region or request.auth.firm.default_region,
-            )
-        elif clarification is not None:
+        if clarification is not None:
             result = {
                 "answer": clarification,
                 "sources": [],
@@ -463,11 +507,17 @@ def ask_question(request, payload: AskQuestionSchema):
                 "confidence_level": "High",
             }
             document = None
-        elif payload.use_advanced_agent:
-            # New tool-calling agent, additive alongside the existing
-            # use_agent (sub-question decomposition) path above/below -
-            # it can also look up cases, compare documents, and generate
-            # drafts, not just retrieve text to answer with.
+        elif payload.use_advanced_agent or effective_case_id:
+            # The tool-calling agent, used when explicitly requested OR whenever
+            # a specific case is in scope (opened directly, or remembered from a
+            # "single result" earlier in the chat). It's the only path that is
+            # case-aware - its get_case_info tool answers case follow-ups like
+            # "can you describe" / "who is the client" about THIS case. The fast
+            # deterministic pipeline has no case context, so without this a case
+            # follow-up would lose the case and fall through to web search
+            # (reproduced live: "are we faced any theft case?" -> "1 criminal
+            # case", then "can you describe" wrongly web-searched). Non-case
+            # questions still take the fast deterministic path below.
             result = run_agent(
                 question=question,
                 firm=request.auth.firm,
@@ -475,7 +525,7 @@ def ask_question(request, payload: AskQuestionSchema):
                 created_by=request.auth,
                 document_id=str(document.document_id) if document is not None else None,
                 case_id=effective_case_id,
-                allow_web_search=payload.allow_web_search,
+                allow_web_search=allow_web_search,
                 answer_mode=payload.answer_mode,
                 region=payload.region or request.auth.firm.default_region,
                 history=history,
@@ -487,7 +537,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     question=question,
                     document_id=str(document.document_id),
                     firm_id=document.firm_id,
-                    allow_web_search=payload.allow_web_search,
+                    allow_web_search=allow_web_search,
                     answer_mode=payload.answer_mode,
                     firm_only=firm_only,
                 )
@@ -497,7 +547,7 @@ def ask_question(request, payload: AskQuestionSchema):
                     document_id=str(document.document_id),
                     firm_id=document.firm_id,
                     role=request.auth.role,
-                    allow_web_search=payload.allow_web_search,
+                    allow_web_search=allow_web_search,
                     answer_mode=payload.answer_mode,
                     history=history,
                     region=payload.region or request.auth.firm.default_region,
@@ -510,7 +560,7 @@ def ask_question(request, payload: AskQuestionSchema):
                 question=question,
                 firm=request.auth.firm,
                 role=request.auth.role,
-                allow_web_search=payload.allow_web_search,
+                allow_web_search=allow_web_search,
                 answer_mode=payload.answer_mode,
                 history=history,
                 region=payload.region or request.auth.firm.default_region,
@@ -584,6 +634,55 @@ def ask_question(request, payload: AskQuestionSchema):
             "research_steps": result.get("research_steps"),
             "route": result.get("route"),
             "confidence_level": result.get("confidence_level"),
+        }
+
+    except groq.APIStatusError as error:
+        # A 413 "request too large" means the accumulated context (system rules
+        # + this conversation's history + retrieved evidence) exceeded the
+        # model's per-request token limit. This can happen in a long chat even
+        # though the same question works in a fresh one. Return a clear,
+        # actionable 200 message instead of a generic 500 so the user knows to
+        # start a new chat rather than thinking the app is broken. Any other
+        # provider status error falls through to the generic handler below.
+        if getattr(error, "status_code", None) == 413:
+            return 200, {
+                "question": question,
+                "answer": (
+                    "This conversation has grown too long for me to process in a "
+                    "single request. Please start a new chat (or ask your question "
+                    "more briefly) and I'll be able to answer it."
+                ),
+                "sources": [],
+                "chat_id": None,
+                "chat_session_id": session.id if session else None,
+                "needs_web_confirmation": False,
+                "research_steps": None,
+            }
+        # A 429 means the LLM provider's rate/usage limit was hit (per-minute
+        # requests, or the account's daily token budget). It's transient and
+        # recovers on its own, so show a clear, calm message telling the user
+        # to retry shortly - never a generic 500 that reads like the app broke,
+        # and never the raw provider error (it leaks org ID, token counts and a
+        # billing URL). Returned as a 200 answer bubble so it renders inline,
+        # the same way the 413 case above does.
+        if getattr(error, "status_code", None) == 429:
+            return 200, {
+                "question": question,
+                "answer": (
+                    "The AI service has hit its usage limit for the moment. "
+                    "Please wait a little while and try again - this clears on "
+                    "its own shortly."
+                ),
+                "sources": [],
+                "chat_id": None,
+                "chat_session_id": session.id if session else None,
+                "needs_web_confirmation": False,
+                "research_steps": None,
+            }
+        print(f"ASK QUESTION ERROR: {error}")
+        return 500, {
+            "error": "Something went wrong while generating the answer. Please try again in a moment.",
+            "details": None,
         }
 
     except Exception as error:

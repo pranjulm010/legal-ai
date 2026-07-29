@@ -20,7 +20,6 @@ import {
   type ChatSessionListItem,
   type ResearchStep,
   type ResponseMode,
-  type SearchMode,
   type UploadDocumentResponse,
 } from "@/lib/api";
 
@@ -45,8 +44,6 @@ type Message = {
   answerMode?: AnswerMode;
   documentName?: string;
   timestamp: Date;
-  awaitingWebConfirm?: boolean;
-  originalQuestion?: string;
   researchSteps?: ResearchStep[] | null;
   sources?: SourceItem[];
   route?: string | null;
@@ -86,30 +83,6 @@ const ANSWER_MODES: {
   },
 ];
 
-const SEARCH_MODES: {
-  value: SearchMode;
-  label: string;
-  icon: string;
-  desc: string;
-}[] = [
-  {
-    value: "firm",
-    label: "Firm Search",
-    icon: "🏛️",
-    desc: "Answers only from your firm's documents, cases, and history",
-  },
-  {
-    value: "web",
-    label: "Web Search",
-    icon: "🌐",
-    desc: "Answers from general knowledge / the web, ignoring firm data",
-  },
-];
-
-function getSearchModeLabel(mode: SearchMode) {
-  return SEARCH_MODES.find((m) => m.value === mode)?.label || "Firm Search";
-}
-
 const SUGGESTED_QUESTIONS = [
   { text: "My phone was stolen. What legal steps should I take now?", icon: "📱" },
   { text: "Help me understand this FIR and what the next steps are.", icon: "📄" },
@@ -135,6 +108,40 @@ function extractAnswer(data: any): string {
     data?.data?.answer ||
     "I could not process that request. Please try again."
   );
+}
+
+// Turns any thrown request error into a short, plain-language message safe to
+// show a non-technical user. It never leaks server internals, file names, or
+// stack traces. When the backend deliberately sent a human-readable message
+// (its handled errors include a plain `error` field), that message is used
+// as-is; otherwise the message is chosen from the type of failure.
+function friendlyErrorMessage(error: any, fallback: string): string {
+  const backendMessage =
+    error?.response?.data?.error || error?.response?.data?.detail;
+  if (typeof backendMessage === "string" && backendMessage.trim()) {
+    return backendMessage;
+  }
+
+  const status = error?.response?.status;
+  const code = error?.code;
+
+  if (status === 429) {
+    return "A lot of requests are coming in right now. Please wait a few seconds and try again.";
+  }
+  if (status === 401 || status === 403) {
+    return "Your session has expired. Please refresh the page or sign in again.";
+  }
+  // No HTTP response reached us at all: the connection dropped, the request
+  // timed out, or the server was momentarily unavailable (for example just
+  // after a restart). This is what a "socket hang up" / network reset looks
+  // like from the browser.
+  if (!error?.response || code === "ECONNABORTED" || code === "ERR_NETWORK") {
+    return "I couldn't reach the server just now — it may have been busy or briefly unavailable. Please try sending your message again.";
+  }
+  if (typeof status === "number" && status >= 500) {
+    return "Something went wrong while preparing your answer. Please try again in a moment.";
+  }
+  return fallback;
 }
 
 // Renders **bold** spans inside a line of text. Used by both bullets and
@@ -304,10 +311,10 @@ export default function LexoraLegalChatPage() {
   // Answer mode is fixed to "plain" - the Plain/Mixed/Expert picker was
   // removed from the UI, but the backend still expects a valid mode.
   const [answerMode] = useState<AnswerMode>("plain");
-  // Source mode: "firm" (default) answers only from the firm's own records;
-  // "web" ignores firm data and answers from general knowledge / web search.
-  // The user can switch at any time; it applies to every subsequent query.
-  const [searchMode, setSearchMode] = useState<SearchMode>("firm");
+  // Retrieval is fully automatic and always follows the firm-first priority
+  // pipeline (firm knowledge -> trusted/web sources -> general AI knowledge).
+  // There is no manual firm/web toggle; the backend selects the source and
+  // falls through to the web on its own when the firm's records have no answer.
 
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentName, setDocumentName] = useState<string | null>(null);
@@ -512,8 +519,10 @@ export default function LexoraLegalChatPage() {
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content:
-            "Document upload failed. Check Django server and the uploadDocument() endpoint in api.ts.",
+          content: friendlyErrorMessage(
+            error,
+            "Sorry, that document couldn't be uploaded. Please check the file and try again."
+          ),
           timestamp: new Date(),
         },
       ]);
@@ -550,11 +559,19 @@ export default function LexoraLegalChatPage() {
         sessionId: "default-session",
         userType: answerMode === "expert" ? "lawyer" : "public",
         mode: backendMode,
-        searchMode,
         documentId,
         caseId: selectedCaseId,
+        // Retrieval falls through automatically: firm knowledge first, then
+        // the web when the firm's records don't answer the question.
+        allowWebSearch: true,
         useAgent,
-        useAdvancedAgent: !useAgent,
+        // Default to the fast deterministic retrieval pipeline (firm docs
+        // keyword-first -> web -> general knowledge) instead of the heavy
+        // tool-calling agent. The agent's multi-step 120B calls made even a
+        // simple question take 40-80s and time out the proxy into a 500; the
+        // deterministic pipeline answers the same questions in a few seconds
+        // and follows the same firm-first retrieval flow.
+        useAdvancedAgent: false,
         chatSessionId: activeSessionId,
         region,
       });
@@ -563,28 +580,6 @@ export default function LexoraLegalChatPage() {
         setActiveSessionId(data.chat_session_id);
         window.history.replaceState({}, "", `/app?session=${data.chat_session_id}`);
         refreshSessions();
-      }
-
-      if (data?.needs_web_confirmation) {
-        const fallbackNote = documentId
-          ? "I couldn't find relevant information in your uploaded document. Would you like me to search the web for public legal sources?"
-          : "I couldn't find relevant information in your firm's documents. Would you like me to search the web for public legal sources?";
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: data.answer && data.answer.trim() ? data.answer : fallbackNote,
-            answerMode,
-            documentName: documentName || undefined,
-            timestamp: new Date(),
-            awaitingWebConfirm: true,
-            originalQuestion: userText,
-            researchSteps: data.research_steps,
-          },
-        ]);
-        return;
       }
 
       const answer = extractAnswer(data);
@@ -610,8 +605,10 @@ export default function LexoraLegalChatPage() {
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content:
-            "There was an error connecting to the backend. Check Django server and the sendMessage() endpoint in api.ts.",
+          content: friendlyErrorMessage(
+            error,
+            "Sorry, I couldn't answer that just now. Please try again in a moment."
+          ),
           timestamp: new Date(),
         },
       ]);
@@ -620,89 +617,8 @@ export default function LexoraLegalChatPage() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   },
-  [answerMode, searchMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
+  [answerMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
 );
-
-  const respondToWebConfirm = useCallback(
-    async (messageId: string, question: string, confirmed: boolean) => {
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === messageId
-            ? { ...message, awaitingWebConfirm: false }
-            : message
-        )
-      );
-
-      if (!confirmed) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "Understood — I won't search the web for this question.",
-            timestamp: new Date(),
-          },
-        ]);
-        return;
-      }
-
-      setLoading(true);
-
-      try {
-        const data = await sendMessageApi({
-          question,
-          userId: "anonymous",
-          sessionId: "default-session",
-          userType: answerMode === "expert" ? "lawyer" : "public",
-          mode: toBackendMode(answerMode),
-          searchMode,
-          documentId,
-          caseId: selectedCaseId,
-          allowWebSearch: true,
-          useAgent,
-          useAdvancedAgent: !useAgent,
-          chatSessionId: activeSessionId,
-          region,
-        });
-
-        if (data?.chat_session_id) {
-          setActiveSessionId(data.chat_session_id);
-          window.history.replaceState({}, "", `/app?session=${data.chat_session_id}`);
-          refreshSessions();
-        }
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: extractAnswer(data),
-            answerMode,
-            documentName: documentName || undefined,
-            timestamp: new Date(),
-            researchSteps: data.research_steps,
-            sources: data.sources as SourceItem[] | undefined,
-            route: data.route,
-            confidenceLevel: data.confidence_level,
-          },
-        ]);
-      } catch (error) {
-        console.error("Web search error:", error);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "Web search failed. Please try again.",
-            timestamp: new Date(),
-          },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [answerMode, searchMode, documentId, documentName, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
-  );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
@@ -1283,51 +1199,6 @@ export default function LexoraLegalChatPage() {
                   ← Dashboard
                 </Link>
               )}
-
-              <div
-                role="group"
-                aria-label="Answer source mode"
-                title={SEARCH_MODES.find((m) => m.value === searchMode)?.desc}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 2,
-                  padding: 3,
-                  borderRadius: 999,
-                  background: "rgba(201,169,110,0.06)",
-                  border: "1px solid rgba(201,169,110,0.16)",
-                }}
-              >
-                {SEARCH_MODES.map((m) => {
-                  const active = searchMode === m.value;
-                  return (
-                    <button
-                      key={m.value}
-                      type="button"
-                      onClick={() => setSearchMode(m.value)}
-                      aria-pressed={active}
-                      title={m.desc}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5,
-                        padding: "5px 12px",
-                        borderRadius: 999,
-                        border: "none",
-                        cursor: "pointer",
-                        fontSize: 11,
-                        fontWeight: active ? 700 : 500,
-                        background: active ? "#c9a96e" : "transparent",
-                        color: active ? "#1a0e00" : "#8a7c68",
-                        transition: "0.15s ease",
-                      }}
-                    >
-                      <span aria-hidden>{m.icon}</span>
-                      {m.label}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           </header>
 
@@ -1449,51 +1320,6 @@ export default function LexoraLegalChatPage() {
                       {message.role === "assistant" ? (
                         <>
                           <FormattedMessage content={message.content} />
-                          {message.awaitingWebConfirm && (
-                            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                              <button
-                                onClick={() =>
-                                  respondToWebConfirm(
-                                    message.id,
-                                    message.originalQuestion || "",
-                                    true
-                                  )
-                                }
-                                style={{
-                                  padding: "7px 14px",
-                                  borderRadius: 999,
-                                  border: "1px solid rgba(201,169,110,0.4)",
-                                  background: "#c9a96e",
-                                  color: "#1a0e00",
-                                  fontWeight: 700,
-                                  fontSize: 12,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                Yes, search the web
-                              </button>
-                              <button
-                                onClick={() =>
-                                  respondToWebConfirm(
-                                    message.id,
-                                    message.originalQuestion || "",
-                                    false
-                                  )
-                                }
-                                style={{
-                                  padding: "7px 14px",
-                                  borderRadius: 999,
-                                  border: "1px solid rgba(201,169,110,0.2)",
-                                  background: "transparent",
-                                  color: "#8a7c68",
-                                  fontSize: 12,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                No
-                              </button>
-                            </div>
-                          )}
                           {message.researchSteps && message.researchSteps.length > 0 && (
                             <details style={{ marginTop: 10 }}>
                               <summary
@@ -1803,11 +1629,7 @@ export default function LexoraLegalChatPage() {
                 }}
               >
                 <span>
-                  {SEARCH_MODES.find((m) => m.value === searchMode)?.icon}{" "}
-                  {getSearchModeLabel(searchMode)}
-                  {searchMode === "firm"
-                    ? " · firm records only"
-                    : " · general knowledge / web"}
+                  🏛️ Firm knowledge first · 🌐 web fallback · 🧠 AI knowledge
                 </span>
                 <span>Enter to send</span>
               </div>

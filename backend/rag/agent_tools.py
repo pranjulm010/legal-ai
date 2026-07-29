@@ -20,8 +20,23 @@ from .web_search import search_legal_web
 
 def _build_context(chunks: List[Dict]) -> str:
     parts = []
-    for index, chunk in enumerate(chunks, start=1):
-        parts.append(f"[Source Chunk {index}]\n{chunk['text']}")
+    seen = set()
+    index = 0
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        # Collapse exact/whitespace-identical chunks. Firms often upload the
+        # same file more than once (reproduced: CASE-2026-004 and a property
+        # dispute file each existed twice), so retrieval returns byte-identical
+        # chunks that waste the context budget - and when the context is later
+        # truncated to fit the model's token limit, those duplicates push
+        # genuinely different evidence (e.g. the SAME person's role in another
+        # matter) past the cutoff so the model never sees it.
+        key = " ".join(text.split()).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        index += 1
+        parts.append(f"[Source Chunk {index}]\n{text}")
     return "\n\n".join(parts)
 
 
@@ -74,7 +89,56 @@ _CASE_TYPE_REFERENCE_RE = re.compile(
 )
 
 
-def _extract_keyword_terms(query: str, max_terms: int = 2) -> List[str]:
+# Question/filler words that are never themselves the thing being looked up.
+# Used to (a) drop noise terms like "Tell" that the proper-noun regex picks up
+# from a sentence-initial capital, and (b) strip a lowercase-typed question
+# down to its entity phrase ("who is ramesh iyer" -> "ramesh iyer") so a
+# keyword pass still happens - the proper-noun regex only fires on capitalized
+# input, so without this a lowercase entity lookup gets no exact-match pass at
+# all and relies on vector similarity alone (which under-ranks bare names).
+_QUERY_STOPWORDS = {
+    "who", "what", "when", "where", "why", "how", "which", "whom", "whose",
+    "is", "are", "was", "were", "am", "be", "been", "being",
+    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "about",
+    "with", "by", "from", "as", "at", "into",
+    "tell", "me", "give", "show", "explain", "describe", "know", "more",
+    "please", "do", "does", "did", "can", "could", "would", "should",
+    "i", "we", "you", "my", "our", "your", "this", "that", "these", "those",
+    "there", "here", "it", "its", "info", "information", "detail", "details",
+    "regarding", "any", "some", "all",
+}
+
+
+def _extract_content_phrases(query: str, max_tokens: int = 3) -> List[str]:
+    """Capitalization-independent entity extraction: strip question/filler
+    words and keep the short contiguous runs of what's left as candidate
+    keyword phrases ("who is ramesh iyer?" -> "ramesh iyer"). Only SHORT runs
+    (<= max_tokens) qualify - a long run is a normal content question that
+    vector search already handles well, and keyword-matching it would just
+    add noise."""
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9.&/-]*", query)
+    phrases = []
+    run = []
+    for token in tokens:
+        if token.lower() in _QUERY_STOPWORDS:
+            if run:
+                phrases.append(run)
+                run = []
+        else:
+            run.append(token)
+    if run:
+        phrases.append(run)
+
+    out = []
+    for run in phrases:
+        if 1 <= len(run) <= max_tokens:
+            phrase = " ".join(run)
+            if len(phrase) >= 3:
+                out.append(phrase)
+    return out
+
+
+def _extract_keyword_terms(query: str, max_terms: int = 3) -> List[str]:
     terms = []
     terms.extend(_SECTION_TERM_RE.findall(query))
     terms.extend(_QUOTED_TERM_RE.findall(query))
@@ -83,12 +147,19 @@ def _extract_keyword_terms(query: str, max_terms: int = 2) -> List[str]:
     # nothing more specific was already found.
     if not terms:
         terms.extend(_PROPER_NOUN_RE.findall(query))
-    # De-dupe while preserving order, drop anything too short to be useful.
+    # Still nothing (e.g. the whole query was typed lowercase, so no proper
+    # noun to find) - fall back to the stopword-stripped entity phrase so an
+    # exact lookup like "who is ramesh iyer" still gets a keyword pass.
+    if not terms:
+        terms.extend(_extract_content_phrases(query))
+    # De-dupe while preserving order; drop anything too short to be useful and
+    # any bare question/filler word (e.g. a sentence-initial "Tell") that would
+    # only match noise.
     seen = set()
     deduped = []
     for term in terms:
         term = term.strip()
-        if len(term) < 4 or term.lower() in seen:
+        if len(term) < 3 or term.lower() in seen or term.lower() in _QUERY_STOPWORDS:
             continue
         seen.add(term.lower())
         deduped.append(term)
@@ -387,10 +458,16 @@ def tool_get_firm_stats(query: str, firm) -> Dict:
     """
     from .firm_stats import try_answer_firm_stats
 
-    answer = try_answer_firm_stats(query, firm)
-    if answer is None:
+    # try_answer_firm_stats returns a 3-tuple (answer, resolved_case_id,
+    # is_cases_query) - the same shape rag_pipeline.py unpacks. Only the
+    # answer text matters to the agent here; unpacking is required because the
+    # tuple itself is never None, so testing the raw return would always be
+    # truthy and (a) never report found=False and (b) hand the model the whole
+    # tuple as the "answer" instead of the plain text.
+    answer_text, _resolved_case_id, _is_cases_query = try_answer_firm_stats(query, firm)
+    if answer_text is None:
         return {"found": False}
-    return {"found": True, "answer": answer}
+    return {"found": True, "answer": answer_text}
 
 
 def tool_get_case_info(case_id: Optional[int] = None, title: Optional[str] = None, firm=None) -> Dict:

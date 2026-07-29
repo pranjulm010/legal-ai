@@ -91,7 +91,12 @@ class AskQuestionSchema(Schema):
     search_mode: str = "firm"
     allow_web_search: bool = False
     use_agent: bool = False
-    use_advanced_agent: bool = True
+    # Default OFF: the fast deterministic retrieval pipeline handles the
+    # firm-first flow (keyword/entity match -> vector+threshold -> web ->
+    # general knowledge) in a few seconds. The tool-calling agent's multi-step
+    # 120B calls took 40-80s per question and timed out the proxy into a 500,
+    # so it's opt-in rather than the default.
+    use_advanced_agent: bool = False
     chat_session_id: Optional[int] = None
     region: Optional[str] = None
 

@@ -195,6 +195,55 @@ def _best_distance(chunks: List[Dict]) -> float:
     return min(distances) if distances else float("inf")
 
 
+def _hybrid_retrieve(
+    question: str,
+    firm_id: int,
+    top_k: int = 5,
+    document_id: Optional[str] = None,
+) -> List[Dict]:
+    """Firm-first hybrid retrieval, identical to what the tool-calling agent
+    does in agent_tools.tool_search_documents - kept as one shared flow so
+    both answer paths behave the same regardless of which one runs.
+
+    Runs the vector similarity search AND an exact keyword/entity pass over
+    the same collection, then merges them. A literal match (a name like
+    "Ramesh Iyer", a section number, a docket ID) is surfaced with a strong
+    score of 0.0 and prepended, so it counts as a firm match REGARDLESS of the
+    vector-distance threshold - vector similarity alone under-ranks bare
+    entity lookups. When the query has no keyword-worthy term, this is just
+    the plain vector search, so nothing else in the pipeline changes.
+
+    The keyword functions are imported from agent_tools so there is a single
+    source of truth for term extraction and merging (no second copy to drift).
+    """
+    from .agent_tools import (
+        _extract_keyword_terms,
+        _keyword_search_scoped,
+        _merge_hybrid_chunks,
+    )
+
+    if document_id:
+        vector_chunks = retrieve_context(
+            question=question, document_id=document_id, firm_id=firm_id, top_k=top_k
+        )
+    else:
+        vector_chunks = retrieve_firm_context(
+            question=question, firm_id=firm_id, top_k=top_k
+        )
+
+    keyword_terms = _extract_keyword_terms(question)
+    if not keyword_terms:
+        return vector_chunks
+
+    keyword_chunks = _keyword_search_scoped(
+        keyword_terms, firm_id=firm_id, document_id=document_id, top_k=top_k
+    )
+    if not keyword_chunks:
+        return vector_chunks
+
+    return _merge_hybrid_chunks(vector_chunks, keyword_chunks, top_k=top_k)
+
+
 def _confidence_percent(score) -> Optional[int]:
     """
     Converts a cosine-distance score (0 = identical, larger = less
@@ -540,11 +589,11 @@ def answer_question(
     """
     is_public = role == "public"
 
-    chunks = retrieve_context(
+    chunks = _hybrid_retrieve(
         question=question,
-        document_id=document_id,
         firm_id=firm_id,
-        top_k=5
+        top_k=5,
+        document_id=document_id,
     )
 
     threshold = settings.RAG_RELEVANCE_DISTANCE_THRESHOLD
@@ -610,7 +659,7 @@ def answer_question(
 
     # Lawyer: before asking to search the web, check whether the answer is
     # sitting in a different document the firm already has.
-    firm_chunks = retrieve_firm_context(question=question, firm_id=firm_id, top_k=5)
+    firm_chunks = _hybrid_retrieve(question=question, firm_id=firm_id, top_k=5)
     firm_best_distance = _best_distance(firm_chunks)
     firm_match_found = bool(firm_chunks) and firm_best_distance <= threshold
 
@@ -883,7 +932,7 @@ def answer_general_question(
 
         return _ask_web_consent(question, [], float("inf"), answer_mode, history)
 
-    chunks = retrieve_firm_context(question=question, firm_id=firm.id, top_k=5)
+    chunks = _hybrid_retrieve(question=question, firm_id=firm.id, top_k=5)
 
     threshold = settings.RAG_RELEVANCE_DISTANCE_THRESHOLD
     best_distance = _best_distance(chunks)

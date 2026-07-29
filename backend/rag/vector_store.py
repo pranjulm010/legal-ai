@@ -137,26 +137,59 @@ def keyword_search_chunks(
     literal substring match, so results get a synthetic best-possible
     score of 0.0 - a real string match is a strong signal in its own
     right, distinct from vector distance.
+
+    Chroma's $contains is case-SENSITIVE, but a user's phrasing ("ramesh
+    iyer") almost never matches a document's own casing ("Ramesh Iyer") -
+    which silently defeated the whole exact-match pass for the very common
+    case of a lowercase-typed entity lookup. To make the match effectively
+    case-insensitive without a schema change, the term is searched under its
+    common casings (as-typed, lower, UPPER, Title Case) and the hits are
+    merged and de-duped.
     """
     collection = get_collection(firm_id)
     where = {"document_id": document_id} if document_id else None
 
-    try:
-        results = collection.get(
-            where=where,
-            where_document={"$contains": keyword},
-            limit=top_k,
-        )
-    except Exception:
+    keyword = (keyword or "").strip()
+    if not keyword:
         return []
 
-    documents = results.get("documents") or []
-    metadatas = results.get("metadatas") or []
+    variants = []
+    for variant in (
+        keyword,
+        keyword.lower(),
+        keyword.upper(),
+        keyword.title(),
+        " ".join(word.capitalize() for word in keyword.split()),
+    ):
+        if variant and variant not in variants:
+            variants.append(variant)
 
-    return [
-        {"text": text, "metadata": metadata, "score": 0.0}
-        for text, metadata in zip(documents, metadatas)
-    ]
+    seen = set()
+    final_results = []
+
+    for variant in variants:
+        try:
+            results = collection.get(
+                where=where,
+                where_document={"$contains": variant},
+                limit=top_k,
+            )
+        except Exception:
+            continue
+
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+
+        for text, metadata in zip(documents, metadatas):
+            key = (metadata.get("document_id"), metadata.get("chunk_id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            final_results.append({"text": text, "metadata": metadata, "score": 0.0})
+            if len(final_results) >= top_k:
+                return final_results
+
+    return final_results
 
 
 def search_firm_chunks(

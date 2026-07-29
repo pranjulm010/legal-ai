@@ -8,7 +8,19 @@ from docx import Document
 from pptx import Presentation
 from PIL import Image
 import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r'C:/Program Files/Tesseract-OCR/tesseract.exe'
+# Tesseract lives at a different path on every OS/install. Honour an explicit
+# TESSERACT_CMD override first; otherwise only pin the common Windows install
+# path when it actually exists on this machine, and fall back to whatever is
+# on PATH (e.g. Homebrew's /opt/homebrew/bin/tesseract on macOS, /usr/bin on
+# Linux). Forcing a hardcoded Windows path unconditionally used to break all
+# OCR (scanned PDFs, image uploads) on non-Windows hosts.
+_tesseract_cmd = os.getenv("TESSERACT_CMD")
+if not _tesseract_cmd:
+    _windows_default = r"C:/Program Files/Tesseract-OCR/tesseract.exe"
+    if os.path.exists(_windows_default):
+        _tesseract_cmd = _windows_default
+if _tesseract_cmd:
+    pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
 from pdf2image import convert_from_path
 
 
