@@ -83,49 +83,6 @@ api.interceptors.response.use(
   }
 );
 
-export type UserType = "public" | "lawyer";
-
-export type ResponseMode = "plain_english" | "mixed" | "professional";
-
-// Top-level source switch: "firm" answers only from the firm's own records;
-// "web" ignores firm data and answers from general knowledge / web search.
-export type SearchMode = "firm" | "web";
-
-export interface SendMessagePayload {
-  question: string;
-  userId?: string;
-  sessionId?: string;
-  userType?: UserType;
-  mode?: ResponseMode;
-  searchMode?: SearchMode;
-  documentId?: string | null;
-  documentType?: string | null;
-  caseId?: number | null;
-  allowWebSearch?: boolean;
-  useAgent?: boolean;
-  useAdvancedAgent?: boolean;
-  chatSessionId?: number | null;
-  region?: string | null;
-}
-
-export interface ResearchStep {
-  sub_question: string;
-  source_type: string;
-  resolved: boolean;
-}
-
-export interface AskQuestionResponse {
-  question: string;
-  answer: string;
-  sources: unknown[];
-  chat_id: number | null;
-  chat_session_id: number | null;
-  needs_web_confirmation: boolean;
-  research_steps: ResearchStep[] | null;
-  route?: string | null;
-  confidence_level?: string | null;
-}
-
 export type UploadDocumentResponse = {
   status?: string;
   message?: string;
@@ -192,56 +149,6 @@ export const waitForDocumentReady = async (
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error("Document is still processing after an extended wait.");
-};
-
-export const sendMessage = async ({
-  question,
-  userId = "anonymous",
-  sessionId = "default-session",
-  userType = "public",
-  mode = "plain_english",
-  searchMode = "firm",
-  documentId,
-  documentType,
-  caseId = null,
-  allowWebSearch = false,
-  useAgent = false,
-  useAdvancedAgent = false,
-  chatSessionId = null,
-  region = null,
-}: SendMessagePayload): Promise<AskQuestionResponse> => {
-  const response = await api.post("/ask-question/", {
-    question: question,
-    user_id: userId,
-    session_id: sessionId,
-    user_type: userType,
-    answer_mode: mode,
-    search_mode: searchMode,
-    document_id: documentId || null,
-    document_type: documentType || null,
-    case_id: caseId || null,
-    allow_web_search: allowWebSearch,
-    use_agent: useAgent,
-    use_advanced_agent: useAdvancedAgent,
-    chat_session_id: chatSessionId || null,
-    region: region || null,
-  });
-
-  return response.data;
-};
-
-export const getHistory = async (
-  userId: string,
-  sessionId: string = "default-session"
-) => {
-  const response = await api.get("/history/", {
-    params: {
-      user_id: userId,
-      session_id: sessionId,
-    },
-  });
-
-  return response.data;
 };
 
 export const checkBackendHealth = async () => {
@@ -418,7 +325,24 @@ export interface ChatSessionMessage {
   question: string;
   answer: string;
   created_at: string;
+  route?: string;
+  sources?: unknown[];
+  my_feedback?: "up" | "down" | null;
 }
+
+export type FeedbackRating = "up" | "down";
+
+export const submitMessageFeedback = async (
+  chatId: number,
+  rating: FeedbackRating,
+  comment: string = ""
+): Promise<void> => {
+  await api.post(`/chat/messages/${chatId}/feedback/`, { rating, comment });
+};
+
+export const clearMessageFeedback = async (chatId: number): Promise<void> => {
+  await api.delete(`/chat/messages/${chatId}/feedback/`);
+};
 
 export interface ChatSessionDetail {
   id: number;

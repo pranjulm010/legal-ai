@@ -9,7 +9,6 @@ protection against.
 Run with: python manage.py test api
 """
 import io
-from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase
@@ -86,7 +85,7 @@ class FirmIsolationTests(TestCase):
 
 class AgentToolFirmScopingTests(TestCase):
     """
-    The AI agent's tools (agent_tools.py) bypass the normal view-layer
+    The AI chat tools (chat/tools/) bypass the normal view-layer
     _get_owned_document-style checks and do their own firm filtering
     directly in the ORM query - this is exactly the kind of thing that's
     easy to get subtly wrong (e.g. forgetting a firm= filter) without any
@@ -99,21 +98,28 @@ class AgentToolFirmScopingTests(TestCase):
         self.firm_b = Firm.objects.create(name="Agent Isolation Firm B", slug="agent-iso-firm-b", size="solo")
         self.case_a = Case.objects.create(firm=self.firm_a, title="Firm A Case", case_type="civil")
 
-    def test_get_case_info_refuses_cross_firm_lookup(self):
-        from rag.agent_tools import tool_get_case_info
+    def test_get_case_details_refuses_cross_firm_lookup(self):
+        from chat.tools import ToolContext
+        from chat.tools.cases import get_case_details
 
-        result = tool_get_case_info(case_id=self.case_a.id, firm=self.firm_b)
-        self.assertIn("error", result)
-        self.assertNotIn("title", result)
+        result = get_case_details(
+            ToolContext(user=None, firm=self.firm_b), case_id=self.case_a.id
+        )
+        self.assertIn("Case not found", result.content)
+        self.assertNotIn("Firm A Case", result.content)
 
-    def test_get_case_info_succeeds_for_owning_firm(self):
-        from rag.agent_tools import tool_get_case_info
+    def test_get_case_details_succeeds_for_owning_firm(self):
+        from chat.tools import ToolContext
+        from chat.tools.cases import get_case_details
 
-        result = tool_get_case_info(case_id=self.case_a.id, firm=self.firm_a)
-        self.assertEqual(result.get("title"), "Firm A Case")
+        result = get_case_details(
+            ToolContext(user=None, firm=self.firm_a), case_id=self.case_a.id
+        )
+        self.assertIn("Firm A Case", result.content)
 
     def test_compare_documents_refuses_document_outside_caller_firm(self):
-        from rag.agent_tools import tool_compare_documents
+        from chat.tools import ToolContext
+        from chat.tools.compare import compare_documents
 
         doc_a = UploadedDocument.objects.create(
             original_name="a.txt", document_type="txt", firm=self.firm_a,
@@ -122,12 +128,12 @@ class AgentToolFirmScopingTests(TestCase):
             original_name="b.txt", document_type="txt", firm=self.firm_b,
         )
 
-        result = tool_compare_documents(
+        result = compare_documents(
+            ToolContext(user=None, firm=self.firm_b),
             document_id_a=str(doc_a.document_id),
             document_id_b=str(doc_b.document_id),
-            firm=self.firm_b,
         )
-        self.assertIn("error", result)
+        self.assertIn("error", result.content)
 
 
 class RolePermissionTests(TestCase):
@@ -207,30 +213,3 @@ class RateLimitTests(TestCase):
             rate_limit_exceeded(key, limit=5, window_seconds=60)
         self.assertTrue(rate_limit_exceeded(key, limit=5, window_seconds=60))
 
-    def test_ask_question_endpoint_enforces_rate_limit(self):
-        # Mocks the agent call so this test is fast and doesn't depend on
-        # a live LLM API - it's verifying the rate-limit gate in the view,
-        # not the AI's answer quality (that's covered by live testing
-        # elsewhere, not something to run 30x per test suite execution).
-        token = _register_firm(self.client, "ratelimit_lawyer", "Rate Limit Firm")
-        cache.clear()
-
-        canned_result = {
-            "answer": "canned",
-            "sources": [],
-            "needs_web_confirmation": False,
-            "research_steps": [],
-            "route": "llm_knowledge",
-            "confidence_level": "Low to Medium",
-        }
-        with patch("api.views.run_agent", return_value=canned_result):
-            last_status = None
-            for _ in range(35):
-                response = self.client.post(
-                    "/api/ask-question/",
-                    {"question": "x"},
-                    content_type="application/json",
-                    **_auth_header(token),
-                )
-                last_status = response.status_code
-        self.assertEqual(last_status, 429)

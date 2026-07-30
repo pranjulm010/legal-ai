@@ -71,6 +71,8 @@ INSTALLED_APPS = [
     "accounts",
     "cases",
     "drafts",
+    "chat",
+    "legalforms",
 ]
 
 MIDDLEWARE = [
@@ -166,30 +168,14 @@ CORS_ALLOW_ALL_ORIGINS = True
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+# Small/fast model for latency-sensitive auxiliary calls (intent detection,
+# memory extraction, style summarization) where the main model would add
+# seconds per turn for no quality gain on such narrow tasks.
+GROQ_FAST_MODEL = os.getenv("GROQ_FAST_MODEL", "llama-3.3-70b-versatile")
+
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL",
     "sentence-transformers/all-MiniLM-L6-v2"
-)
-
-RAG_RELEVANCE_DISTANCE_THRESHOLD = float(
-    os.getenv("RAG_RELEVANCE_DISTANCE_THRESHOLD", "0.72")
-)
-
-# A stricter distance cutoff used ONLY to decide "does the firm actually
-# have a genuinely relevant local document for this question?" - the
-# question that gates whether the agent offers a web search. The main
-# threshold above (0.72) is deliberately loose so the answer pipeline still
-# feeds borderline context to the LLM, but it's too loose for the
-# grounding/web-consent decision: boilerplate clauses present in almost
-# every contract (governing law, jurisdiction, termination) are semantic
-# near-misses for any legal-sounding question and score ~0.55-0.70, just
-# under 0.72. Measured live, genuinely relevant matches land <=0.45 while
-# off-topic boilerplate lands >=0.55, so 0.55 cleanly separates them. When
-# the best local match is weaker than this, the agent treats the question
-# as "nothing relevant found locally" and offers a web search instead of
-# silently answering from the model's own general knowledge.
-RAG_STRONG_GROUNDING_DISTANCE_THRESHOLD = float(
-    os.getenv("RAG_STRONG_GROUNDING_DISTANCE_THRESHOLD", "0.55")
 )
 
 SIMPLE_JWT = {

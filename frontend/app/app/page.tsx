@@ -12,16 +12,16 @@ import {
   REGIONS,
   renameChatSession as renameChatSessionApi,
   searchChatHistory,
-  sendMessage as sendMessageApi,
   uploadDocument as uploadDocumentApi,
   waitForDocumentReady,
   type CaseListItem,
   type ChatSearchResult,
   type ChatSessionListItem,
-  type ResearchStep,
-  type ResponseMode,
+  type FeedbackRating,
   type UploadDocumentResponse,
 } from "@/lib/api";
+import { streamChat } from "@/lib/chatStream";
+import FeedbackButtons from "@/components/chat/FeedbackButtons";
 
 type AnswerMode = "plain" | "mixed" | "expert";
 
@@ -37,6 +37,13 @@ type SourceItem = {
   url?: string;
 };
 
+type ResearchStep = {
+  tool?: string;
+  sub_question: string;
+  source_type: string;
+  resolved: boolean;
+};
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -48,6 +55,13 @@ type Message = {
   sources?: SourceItem[];
   route?: string | null;
   confidenceLevel?: string | null;
+  // Persisted ChatMessage id - present once the answer is stored, enables feedback.
+  chatId?: number;
+  myFeedback?: FeedbackRating | null;
+  // True while tokens are still arriving for this message.
+  streaming?: boolean;
+  // Live status label shown while the assistant is working ("Searching...").
+  statusLabel?: string;
 };
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -55,6 +69,21 @@ const ROUTE_LABELS: Record<string, string> = {
   firm_database: "Firm Database",
   web_search: "Trusted Web Search",
   llm_knowledge: "General AI Knowledge",
+  tools: "AI with Firm Tools",
+  direct: "Direct Answer",
+};
+
+// Mirrors the backend's tool -> icon grouping for live tool events.
+const TOOL_SOURCE_TYPES: Record<string, string> = {
+  search_documents: "document",
+  search_web: "web",
+  similar_case_search: "case",
+  get_case_details: "case",
+  get_case_link: "case",
+  get_firm_overview: "case",
+  get_form_details: "case",
+  generate_draft: "draft",
+  compare_documents: "compare",
 };
 
 const ANSWER_MODES: {
@@ -92,22 +121,6 @@ const SUGGESTED_QUESTIONS = [
 
 function getModeLabel(mode: AnswerMode) {
   return ANSWER_MODES.find((m) => m.value === mode)?.label || "Plain English";
-}
-
-function toBackendMode(mode: AnswerMode): ResponseMode {
-  if (mode === "plain") return "plain_english";
-  if (mode === "expert") return "professional";
-  return "mixed";
-}
-
-function extractAnswer(data: any): string {
-  return (
-    data?.answer ||
-    data?.response ||
-    data?.message ||
-    data?.data?.answer ||
-    "I could not process that request. Please try again."
-  );
 }
 
 // Turns any thrown request error into a short, plain-language message safe to
@@ -156,6 +169,32 @@ function renderInlineBold(text: string) {
     ) : (
       <span key={idx}>{part}</span>
     );
+  });
+}
+
+// Renders markdown links plus **bold** inside a line. In-app links (like a
+// case deep-link from the get_case_link tool) navigate client-side; external
+// ones open in a new tab.
+function renderInline(text: string) {
+  const linkStyle: React.CSSProperties = {
+    color: "#8fb4e3",
+    textDecoration: "underline",
+  };
+  return text.split(/(\[[^\]]+\]\([^)]+\))/g).map((part, idx) => {
+    const match = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (match) {
+      const [, label, href] = match;
+      return href.startsWith("/") ? (
+        <Link key={idx} href={href} style={linkStyle}>
+          {label}
+        </Link>
+      ) : (
+        <a key={idx} href={href} target="_blank" rel="noreferrer" style={linkStyle}>
+          {label}
+        </a>
+      );
+    }
+    return <span key={idx}>{renderInlineBold(part)}</span>;
   });
 }
 
@@ -211,7 +250,7 @@ function FormattedMessage({ content }: { content: string }) {
               }}
             >
               <span style={{ color: "#c9a96e" }}>▸</span>
-              <span>{renderInlineBold(line.slice(2))}</span>
+              <span>{renderInline(line.slice(2))}</span>
             </div>
           );
         }
@@ -239,9 +278,6 @@ if (line.match(/^\*\*(.*?)\*\*:?\s*$/)) {
   );
 }
 
-// Bold inline support
-const formattedLine = line.split(/(\*\*.*?\*\*)/g);
-
 return (
   <p
     key={index}
@@ -252,46 +288,10 @@ return (
       fontSize: 14,
     }}
   >
-    {formattedLine.map((part, idx) => {
-      const isBold =
-        part.startsWith("**") && part.endsWith("**");
-
-      return isBold ? (
-        <strong
-          key={idx}
-          style={{
-            color: "#f2dfb5",
-            fontWeight: 700,
-          }}
-        >
-          {part.replace(/\*\*/g, "")}
-        </strong>
-      ) : (
-        <span key={idx}>{part}</span>
-      );
-    })}
+    {renderInline(line)}
   </p>
 );
       })}
-    </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <div style={{ display: "flex", gap: 5, padding: "5px 0" }}>
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: "#c9a96e",
-            animation: `typingBounce 1.3s ease-in-out ${i * 0.18}s infinite`,
-          }}
-        />
-      ))}
     </div>
   );
 }
@@ -323,7 +323,6 @@ export default function LexoraLegalChatPage() {
   const [isListening,setIsListening]=useState(false)
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [useAgent, setUseAgent] = useState(false);
   const [region, setRegion] = useState("india");
   // Optional case scope: when set, questions are answered from that case's
   // own linked documents (backend scopes search_documents by case_id).
@@ -341,6 +340,10 @@ export default function LexoraLegalChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight stream when leaving the page.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -385,6 +388,10 @@ export default function LexoraLegalChatPage() {
               role: "assistant" as const,
               content: m.answer,
               timestamp: new Date(m.created_at),
+              chatId: m.id,
+              myFeedback: m.my_feedback ?? null,
+              route: m.route || null,
+              sources: (m.sources as SourceItem[] | undefined) || undefined,
             },
           ])
         );
@@ -546,78 +553,112 @@ export default function LexoraLegalChatPage() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    // The assistant's reply streams into this placeholder as events arrive.
+    const assistantId = crypto.randomUUID();
+    const assistantMessage: Message = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      answerMode,
+      documentName: documentName || undefined,
+      timestamp: new Date(),
+      streaming: true,
+      statusLabel: "Thinking...",
+    };
+
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setInput("");
     setLoading(true);
 
+    const patchAssistant = (patch: Partial<Message> | ((prev: Message) => Partial<Message>)) => {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantId
+            ? { ...message, ...(typeof patch === "function" ? patch(message) : patch) }
+            : message
+        )
+      );
+    };
+
+    // A new send supersedes any stream still in flight.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const backendMode = toBackendMode(answerMode);
-
-      const data = await sendMessageApi({
-        question: userText,
-        userId: "anonymous",
-        sessionId: "default-session",
-        userType: answerMode === "expert" ? "lawyer" : "public",
-        mode: backendMode,
-        documentId,
-        caseId: selectedCaseId,
-        // Retrieval falls through automatically: firm knowledge first, then
-        // the web when the firm's records don't answer the question.
-        allowWebSearch: true,
-        useAgent,
-        // Default to the fast deterministic retrieval pipeline (firm docs
-        // keyword-first -> web -> general knowledge) instead of the heavy
-        // tool-calling agent. The agent's multi-step 120B calls made even a
-        // simple question take 40-80s and time out the proxy into a 500; the
-        // deterministic pipeline answers the same questions in a few seconds
-        // and follows the same firm-first retrieval flow.
-        useAdvancedAgent: false,
-        chatSessionId: activeSessionId,
-        region,
-      });
-
-      if (data?.chat_session_id) {
-        setActiveSessionId(data.chat_session_id);
-        window.history.replaceState({}, "", `/app?session=${data.chat_session_id}`);
-        refreshSessions();
-      }
-
-      const answer = extractAnswer(data);
-
-      const assistantMessage: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: answer,
-        answerMode,
-        documentName: documentName || undefined,
-        timestamp: new Date(),
-        researchSteps: data.research_steps,
-        sources: data.sources as SourceItem[] | undefined,
-        route: data.route,
-        confidenceLevel: data.confidence_level,
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (error) {
-      console.error("Chat error:", error);
-      setMessages((prev) => [
-        ...prev,
+      await streamChat(
         {
-          id: crypto.randomUUID(),
-          role: "assistant",
+          question: userText,
+          chat_session_id: activeSessionId,
+          document_id: documentId,
+          case_id: selectedCaseId,
+          region,
+        },
+        {
+          onSession: (data) => {
+            setActiveSessionId(data.chat_session_id);
+            window.history.replaceState({}, "", `/app?session=${data.chat_session_id}`);
+          },
+          onStatus: (data) => patchAssistant({ statusLabel: data.label }),
+          onToolCall: (data) =>
+            patchAssistant({ statusLabel: `Using ${data.name.replaceAll("_", " ")}...` }),
+          onToolResult: (data) =>
+            patchAssistant((prev) => ({
+              researchSteps: [
+                ...(prev.researchSteps || []),
+                {
+                  tool: data.name,
+                  sub_question: data.summary,
+                  source_type: TOOL_SOURCE_TYPES[data.name] || "context",
+                  resolved: true,
+                },
+              ],
+              sources: [...(prev.sources || []), ...(data.sources as SourceItem[])],
+            })),
+          onToken: (data) =>
+            patchAssistant((prev) => ({
+              content: prev.content + data.text,
+              statusLabel: undefined,
+            })),
+          onMessage: (data) =>
+            patchAssistant({
+              content: data.answer,
+              chatId: data.chat_id,
+              route: data.route,
+              sources: data.sources as SourceItem[],
+              researchSteps: data.research_steps,
+              streaming: false,
+              statusLabel: undefined,
+            }),
+          onError: (data) =>
+            patchAssistant({
+              content: data.error,
+              streaming: false,
+              statusLabel: undefined,
+            }),
+        },
+        controller.signal
+      );
+      refreshSessions();
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error("Chat error:", error);
+        patchAssistant({
           content: friendlyErrorMessage(
             error,
             "Sorry, I couldn't answer that just now. Please try again in a moment."
           ),
-          timestamp: new Date(),
-        },
-      ]);
+          streaming: false,
+          statusLabel: undefined,
+        });
+      }
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   },
-  [answerMode, documentId, documentName, input, loading, documentProcessing, useAgent, activeSessionId, region, selectedCaseId, refreshSessions]
+  [answerMode, documentId, documentName, input, loading, documentProcessing, activeSessionId, region, selectedCaseId, refreshSessions]
 );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -860,32 +901,6 @@ export default function LexoraLegalChatPage() {
               🧹 Remove document
             </button>
 
-            <label
-              style={{
-                marginTop: 16,
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
-                fontSize: 12,
-                color: "#8a7c68",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={useAgent}
-                onChange={(event) => setUseAgent(event.target.checked)}
-                style={{ marginTop: 2 }}
-              />
-              <span>
-                🧠 Research agent
-                <br />
-                <span style={{ fontSize: 10, color: "#5a4f3f" }}>
-                  Breaks your question into sub-questions and researches each one
-                </span>
-              </span>
-            </label>
-
             <div style={{ marginTop: 16 }}>
               <label
                 style={{
@@ -971,7 +986,7 @@ export default function LexoraLegalChatPage() {
                           }
                         }}
                         disabled={!result.chat_session_id}
-                        title={!result.chat_session_id ? "This chat is too old to resume" : undefined}
+                        title={!result.chat_session_id ? "This chat has no session to resume" : undefined}
                         style={{
                           textAlign: "left",
                           padding: "8px 10px",
@@ -1319,6 +1334,11 @@ export default function LexoraLegalChatPage() {
                     >
                       {message.role === "assistant" ? (
                         <>
+                          {message.streaming && !message.content && (
+                            <p style={{ margin: 0, fontSize: 12, color: "#8a7c68" }}>
+                              {message.statusLabel || "Thinking..."}
+                            </p>
+                          )}
                           <FormattedMessage content={message.content} />
                           {message.researchSteps && message.researchSteps.length > 0 && (
                             <details style={{ marginTop: 10 }}>
@@ -1427,6 +1447,13 @@ export default function LexoraLegalChatPage() {
                               )}
                             </div>
                           )}
+                          {message.chatId != null && !message.streaming && (
+                            <FeedbackButtons
+                              key={message.chatId}
+                              chatId={message.chatId}
+                              initial={message.myFeedback ?? null}
+                            />
+                          )}
                         </>
                       ) : (
                         <p
@@ -1467,21 +1494,6 @@ export default function LexoraLegalChatPage() {
                     </div>
                   </div>
                 ))}
-
-                {loading && (
-                  <div style={{ display: "flex", justifyContent: "flex-start" }}>
-                    <div
-                      style={{
-                        padding: "14px 17px",
-                        borderRadius: "5px 16px 16px 16px",
-                        background: "rgba(20,16,10,0.96)",
-                        border: "1px solid rgba(201,169,110,0.12)",
-                      }}
-                    >
-                      <TypingDots />
-                    </div>
-                  </div>
-                )}
 
                 <div ref={messagesEndRef} />
               </div>

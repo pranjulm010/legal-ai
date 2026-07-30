@@ -1,16 +1,19 @@
 # Legal AI
 
-A multi-tenant AI platform for law firms — document intelligence, firm database Q&A, case management, and an AI drafting/research agent, built on a Django backend, Next.js frontend, ChromaDB vector store, and Groq-hosted LLMs.
+A multi-tenant AI platform for law firms — document intelligence, firm database Q&A, case management, and a personalized AI legal assistant, built on a Django backend, Next.js frontend, ChromaDB vector store, and Groq-hosted LLMs.
 
 ## What it does
 
 - **Document intelligence** — upload PDFs, DOCX, PPTX, images, and scanned documents (OCR via Tesseract), then summarize, extract structured entities, analyze risk, check compliance, or compare documents. Answers are always grounded in the actual retrieved text, never invented.
-- **Retrieval-augmented Q&A** — ask questions about an uploaded document or across a firm's whole document collection. Per-firm isolated vector collections (Chroma) enforce a hard multi-tenant boundary, not just a metadata filter.
-- **Firm database Q&A** — natural-language questions about the firm's own operational data ("how many open cases", "who is on my team", "list my drafts") are answered directly from the database, with an LLM intent classifier as a general fallback so phrasing/synonyms/language don't need to be hardcoded.
-- **Conversational memory** — the agent tracks which case or collection of records a conversation has narrowed down to, so follow-ups ("what is it about?", "who is the client?", "what are they?") resolve without re-asking for an identifier, while still asking for clarification when the reference is genuinely ambiguous.
+- **Streaming AI chat (tool-first)** — every message goes through an intent-detection layer, then either a direct streamed answer or a bounded LLM tool-calling loop. Answers stream over SSE (`POST /api/chat/stream/`) with live tool/status events feeding the sources panel.
+- **Dual RAG** —
+  - *Knowledge Base RAG*: per-firm isolated Chroma collections over uploaded documents (hard multi-tenant boundary, hybrid vector + exact-keyword retrieval, no relevance thresholds — the model judges match distances itself).
+  - *Memory RAG*: per-user memory collections built from distilled conversation takeaways, thumbs-down feedback, and corrections; retrieved every turn plus a standing per-user style profile, so answers adapt to each user's tone and preferences over time.
+- **Modular tool registry** — tools are single decorated functions (`backend/chat/tools/`): document search, trusted-domain web search, similar-case search (semantic case index), case details, in-app case deep links, firm overview, form details, document compare, and draft generation. Role permissions gate which tools each user's model even sees; adding a tool never touches the pipeline.
+- **Feedback loop** — thumbs up/down (with optional comment) on every AI answer; negative feedback becomes memory that shapes future answers.
 - **Case management** — cases, reminders, contacts, assigned lawyers, and an auto-logged case activity feed, all firm-scoped.
 - **AI drafting** — generate legal drafts and redline suggestions from a prompt, with case linking and PDF/DOCX export.
-- **Tool-calling research agent** — a single agent (mandatory for every query) that can search documents, look up case records, compare documents, generate drafts, and search the public web (only with explicit consent), with anti-hallucination guardrails, a self-reflection check, and persistent cross-session "lessons learned" from caught mistakes.
+- **Forms library** — firm-scoped legal/court form records (code, jurisdiction, required fields, submission link) served to the assistant through the form-details tool.
 - **Role-based access control** — admin / partner / associate / paralegal / public roles, each with a distinct permission set, enforced firm-wide.
 - **Google Drive sync** — optional per-firm Drive folder indexing.
 
@@ -19,16 +22,26 @@ A multi-tenant AI platform for law firms — document intelligence, firm databas
 ```
 backend/    Django 5 + django-ninja REST API
   accounts/   Firms, lawyers, auth (JWT), roles/permissions, Google Drive integration
-  api/        Document upload/processing, chat sessions, ask-question endpoint
+  api/        Document upload/processing, chat session/message models + endpoints
   cases/      Cases, reminders, contacts, case activity feed
   drafts/     AI drafting, redlining, PDF/DOCX export
-  rag/        RAG pipeline, vector store, document processing/OCR, the tool-calling agent,
-              firm-stats intent classification, web search
+  legalforms/ Legal/court form records + CRUD
+  chat/       The AI chatbot module (isolated):
+                orchestrator.py  one turn: intent -> tools -> streamed answer -> persist -> learn
+                intent.py        fast-model intent detection (tools vs direct, correction capture)
+                tools/           decorator-based tool registry + all tools
+                memory/          Memory RAG: store (per-user Chroma), writer, style profile
+                prompts/         system/intent/memory prompts + shared fragments
+                api.py           SSE stream endpoint + feedback endpoints
+  rag/        Shared retrieval/ingestion library: vector store, embeddings, chunking,
+              document processing/OCR, web search, drafting, evals
 
 frontend/   Next.js (App Router) + React 19 + Tailwind
+              lib/chatStream.ts             fetch/ReadableStream SSE client
+              components/chat/FeedbackButtons.tsx
 ```
 
-**LLMs**: `llama-3.3-70b-versatile` (Groq) for RAG answers, drafting, classification, and reflection; a separate `openai/gpt-oss-120b` (Groq) used only for the agent's multi-tool selection, since the primary model proved unreliable at choosing between 2+ simultaneous tools.
+**LLMs**: `llama-3.3-70b-versatile` (Groq) for the tool loop, answers, and drafting; `llama-3.1-8b-instant` (`GROQ_FAST_MODEL`) for intent detection, memory extraction, and style summarization. Per-firm API key/model overrides supported.
 
 **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2`, run locally (no external API call, no quota).
 
@@ -79,10 +92,11 @@ Visit `http://localhost:3000`.
 
 ```bash
 cd backend
-python manage.py test api.tests rag.tests
+python manage.py test api chat
+python manage.py run_evals        # live golden-case eval gate (needs GROQ_API_KEY)
 ```
 
 ## Notes
 
 - `backend/vector_db/`, `backend/media/`, and `backend/db.sqlite3` are gitignored — they're generated/runtime data, not source. A fresh clone starts with an empty vector store and database (`migrate` creates the schema).
-- The tool-calling agent is the default path for every question; there is no separate "basic" mode.
+- The chat pipeline has no hardcoded routing regexes, distance thresholds, or chat rate limits — behavior comes from LLM reasoning over tools, dual-RAG retrieval, and per-user memory.

@@ -72,53 +72,6 @@ class DocumentContentUpdateSchema(Schema):
     content: str
 
 
-class AskQuestionSchema(Schema):
-    question: str
-    document_id: Optional[str] = None
-    case_id: Optional[int] = None
-    user_id: str = "anonymous"
-    session_id: str = "default-session"
-    user_type: str = "public"
-    answer_mode: str = "plain_english"
-    document_type: Optional[str] = None
-    # Top-level source switch:
-    #   "firm" (default) - answer ONLY from the firm's own records (uploaded
-    #     documents, case files, history); never web or general LLM knowledge.
-    #     If nothing relevant is found, say so politely.
-    #   "web"  - ignore all firm data entirely; answer from general knowledge
-    #     / web search only.
-    # Distinct from answer_mode (which controls the answer's style/register).
-    search_mode: str = "firm"
-    allow_web_search: bool = False
-    use_agent: bool = False
-    # Default OFF: the fast deterministic retrieval pipeline handles the
-    # firm-first flow (keyword/entity match -> vector+threshold -> web ->
-    # general knowledge) in a few seconds. The tool-calling agent's multi-step
-    # 120B calls took 40-80s per question and timed out the proxy into a 500,
-    # so it's opt-in rather than the default.
-    use_advanced_agent: bool = False
-    chat_session_id: Optional[int] = None
-    region: Optional[str] = None
-
-
-class ResearchStepSchema(Schema):
-    sub_question: str
-    source_type: str
-    resolved: bool
-
-
-class AskQuestionResponseSchema(Schema):
-    question: str
-    answer: str
-    sources: List[Any]
-    chat_id: Optional[int] = None
-    chat_session_id: Optional[int] = None
-    needs_web_confirmation: bool = False
-    research_steps: Optional[List[ResearchStepSchema]] = None
-    route: Optional[str] = None
-    confidence_level: Optional[str] = None
-
-
 class ChatMessageSchema(Schema):
     id: int
     question: str
@@ -152,6 +105,10 @@ class ChatSessionMessageSchema(Schema):
     question: str
     answer: str
     created_at: datetime
+    route: str = ""
+    sources: List[dict] = []
+    # The requesting user's own thumbs rating ("up"/"down"), if any.
+    my_feedback: Optional[str] = None
 
 
 class ChatSessionDetailSchema(Schema):

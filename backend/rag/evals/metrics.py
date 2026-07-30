@@ -14,18 +14,21 @@ from typing import Dict, List, Tuple
 from django.conf import settings
 
 from ..groq_client import get_groq_client
-from ..rag_pipeline import (
-    NOT_LAW_RELATED_MESSAGE,
-    ROUTE_FIRM_DATABASE,
-    ROUTE_LLM_KNOWLEDGE,
-    ROUTE_UPLOADED_DOCUMENT,
-)
-from ..groq_client import is_insufficient_answer
 from .dataset import (
     EvalCase,
     KIND_GENERAL_KNOWLEDGE,
     KIND_INSUFFICIENT,
     KIND_NOT_LAW,
+)
+
+# Eval heuristic (not response logic): phrases that signal the answer
+# honestly admits the requested fact wasn't found in the documents.
+_ADMITS_NOT_FOUND_RE = re.compile(
+    r"(couldn't|could not|can't|cannot|didn't|did not|don't|do not|doesn't|does not|no)\s+"
+    r"(find|locate|contain|have|mention|appear|specify|include|state)"
+    r"|not\s+(found|mentioned|specified|included|stated|present)"
+    r"|no\s+(information|record|mention|reference)",
+    re.I,
 )
 
 
@@ -50,41 +53,43 @@ def retrieval_recall(retrieved_chunks: List[Dict], expected_snippets: List[str])
 def scope_correct(case: EvalCase, result: Dict) -> Tuple[bool, str]:
     """
     For the non-answerable kinds, "correct" means the pipeline did not
-    fabricate a document answer:
+    fabricate a document-grounded answer. The chat pipeline has two routes
+    ("direct" - no tools; "tools" - grounded in tool calls), and per-answer
+    sources record what was actually cited:
 
-      not_law           -> returns the plain not-a-legal-question message.
-      insufficient      -> admits it, or routes away from any document
-                           source (never claims a document/firm answer).
-      general_knowledge -> answers from general knowledge (llm_knowledge),
-                           not from a document it doesn't have.
+      not_law           -> answered without citing firm documents.
+      insufficient      -> admits the fact wasn't found, or at least does
+                           not present document citations for it.
+      general_knowledge -> answered without citing firm documents.
     """
     # Coerce defensively: a malformed pipeline result (e.g. a non-string
     # answer) should be graded as a failure and surfaced, never crash the run.
     raw_answer = result.get("answer")
     answer = (raw_answer if isinstance(raw_answer, str) else str(raw_answer or "")).strip()
     route = result.get("route")
+    sources = result.get("sources") or []
+    cited_documents = any(
+        isinstance(source, dict) and source.get("source_type") == "document"
+        for source in sources
+    )
 
-    if case.kind == KIND_NOT_LAW:
-        ok = NOT_LAW_RELATED_MESSAGE in answer
-        return ok, "returned not-a-legal-question message" if ok else f"expected refusal, got route={route}"
+    if case.kind in (KIND_NOT_LAW, KIND_GENERAL_KNOWLEDGE):
+        ok = not cited_documents
+        return ok, (
+            "answered without citing firm documents"
+            if ok
+            else f"cited firm documents for a non-document question (route={route})"
+        )
 
     if case.kind == KIND_INSUFFICIENT:
-        # Passing means it did NOT present a document/firm answer for a fact
-        # that lives in no document - either by saying so outright, or by
-        # falling through to general knowledge instead of a document route.
-        admitted = is_insufficient_answer(answer)
-        no_doc_route = route not in (ROUTE_UPLOADED_DOCUMENT, ROUTE_FIRM_DATABASE)
-        ok = admitted or no_doc_route
+        admitted = bool(_ADMITS_NOT_FOUND_RE.search(answer))
+        ok = admitted or not cited_documents
         reason = (
-            "admitted insufficient context" if admitted
-            else f"did not use a document route (route={route})" if ok
+            "admitted the fact wasn't found" if admitted
+            else f"no document citations presented (route={route})" if ok
             else f"fabricated a document answer (route={route})"
         )
         return ok, reason
-
-    if case.kind == KIND_GENERAL_KNOWLEDGE:
-        ok = route == ROUTE_LLM_KNOWLEDGE
-        return ok, "answered from general knowledge" if ok else f"expected general-knowledge route, got route={route}"
 
     return True, "n/a"
 

@@ -42,8 +42,8 @@ class EvalCase:
     id: str
     question: str
     kind: str
-    # Document key the question is scoped to (None = firm-wide question,
-    # answered via answer_general_question rather than answer_question).
+    # Document key the question is scoped to (None = firm-wide question
+    # answered without an attached document).
     doc: Optional[str] = None
     expected_snippets: List[str] = field(default_factory=list)
     expected_facts: List[str] = field(default_factory=list)

@@ -1,8 +1,9 @@
 """
 Eval runner: sets up an isolated firm pre-loaded with the sample documents,
-runs every golden case through the REAL pipeline (answer_question /
-answer_general_question - no mocks), scores the results, and prints a
-scorecard. This is the regression gate for retrieval/generation changes.
+runs every golden case through the REAL chat pipeline
+(chat.orchestrator.run_chat_turn_sync - no mocks), scores the results, and
+prints a scorecard. This is the regression gate for retrieval/generation
+changes.
 """
 import time
 from typing import Dict, List, Optional
@@ -11,10 +12,10 @@ from django.contrib.auth.models import User
 from django.utils.crypto import get_random_string
 
 from accounts.models import Firm, LawyerProfile
-from api.models import UploadedDocument
+from api.models import ChatMessage, ChatSession, UploadedDocument
 from cases.sample_data import seed_sample_documents
+from chat.orchestrator import run_chat_turn_sync
 
-from ..rag_pipeline import answer_general_question, answer_question, build_context
 from ..retriever import retrieve_context, retrieve_firm_context
 from ..vector_store import get_chroma_client
 from . import metrics
@@ -24,6 +25,11 @@ from .dataset import (
     KIND_ANSWERABLE,
     EvalCase,
 )
+
+
+def build_context(chunks: List[Dict]) -> str:
+    """Joined chunk text used as the groundedness-judge context."""
+    return "\n\n".join(chunk.get("text", "") for chunk in chunks)
 
 # A dedicated, clearly-labelled firm so eval data never mixes with a real
 # firm's records. Reused across runs (re-embedding the samples every run is
@@ -93,31 +99,48 @@ def _run_case(case: EvalCase, firm: Firm, doc_ids: Dict[str, str], use_judge: bo
     result_row: Dict = {"id": case.id, "kind": case.kind, "error": None}
 
     try:
+        profile = (
+            LawyerProfile.objects.select_related("firm", "user")
+            .filter(firm=firm)
+            .first()
+        )
+        if profile is None:
+            result_row["error"] = "eval firm has no lawyer profile"
+            return result_row
+
+        # Conversation history lives in the session now - seed prior turns
+        # as real ChatMessages so the pipeline picks them up naturally.
+        chat_session_id = None
+        if case.history:
+            session = ChatSession.objects.create(
+                firm=firm, started_by=profile, title=f"eval:{case.id}"
+            )
+            for turn in case.history:
+                ChatMessage.objects.create(
+                    session=session,
+                    firm=firm,
+                    question=turn.get("question", ""),
+                    answer=turn.get("answer", ""),
+                    asked_by=profile,
+                )
+            chat_session_id = session.id
+
+        document_id = None
         if case.doc:
             document_id = doc_ids.get(case.doc)
             if not document_id:
                 result_row["error"] = f"sample document '{case.doc}' not seeded"
                 return result_row
             retrieved = retrieve_context(case.question, document_id, firm.id, top_k=5)
-            answer_result = answer_question(
-                question=case.question,
-                document_id=document_id,
-                firm_id=firm.id,
-                role="lawyer",
-                allow_web_search=False,
-                answer_mode="mixed",
-                history=case.history,
-            )
         else:
             retrieved = retrieve_firm_context(case.question, firm.id, top_k=5)
-            answer_result = answer_general_question(
-                question=case.question,
-                firm=firm,
-                role="lawyer",
-                allow_web_search=False,
-                answer_mode="mixed",
-                history=case.history,
-            )
+
+        answer_result = run_chat_turn_sync(
+            profile,
+            question=case.question,
+            chat_session_id=chat_session_id,
+            document_id=document_id,
+        )
     except Exception as error:  # noqa: BLE001 - one bad case shouldn't sink the run
         result_row["error"] = f"pipeline error: {str(error)[:200]}"
         return result_row
@@ -153,7 +176,10 @@ def run(
     only_ids: Optional[List[str]] = None,
     use_judge: bool = True,
     fresh: bool = False,
-    sleep: float = 1.0,
+    # One chat turn (intent + tool loop + answer) plus two judge calls
+    # spends a big slice of the Groq free tier's per-minute token budget -
+    # space cases out or the whole run degrades into 429 answers.
+    sleep: float = 20.0,
     log=print,
 ) -> Dict:
     firm = setup_eval_firm(fresh=fresh)

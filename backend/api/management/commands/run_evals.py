@@ -39,8 +39,8 @@ class Command(BaseCommand):
             help="Run only the named case id(s).",
         )
         parser.add_argument(
-            "--sleep", type=float, default=1.0,
-            help="Seconds to wait between cases to respect Groq rate limits (default 1.0).",
+            "--sleep", type=float, default=20.0,
+            help="Seconds to wait between cases to respect Groq rate limits (default 20.0).",
         )
 
     def handle(self, *args, **options):

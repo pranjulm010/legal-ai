@@ -194,6 +194,26 @@ class ChatMessage(models.Model):
     question = models.TextField()
     answer = models.TextField()
 
+    # How the answer was produced ("direct" or "tools", plus the dominant
+    # tool recorded in sources) - kept per-message so past conversations
+    # remain explainable after the pipeline evolves.
+    route = models.CharField(max_length=30, blank=True, default="")
+
+    # Source citations gathered from tool results during the turn, in the
+    # shape the frontend sources panel consumes. Stored on the message so
+    # reopening a session restores its sources without re-running tools.
+    sources = models.JSONField(default=list, blank=True)
+
+    # Sessions are firm-visible, but feedback and memory must be attributed
+    # to the individual who asked - not session.started_by.
+    asked_by = models.ForeignKey(
+        "accounts.LawyerProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -203,26 +223,3 @@ class ChatMessage(models.Model):
         return self.question[:80]
 
 
-class AgentLesson(models.Model):
-    """
-    Persistent, cross-session record of a mistake the AI agent (see
-    rag/research_agent.py) actually made and caught via its own reflection
-    check - e.g. fabricating a case citation that wasn't in any tool
-    result. Unlike the agent's ordinary conversation memory (which resets
-    every new chat), these rows persist in the database and get replayed
-    into the system prompt of every future agent run platform-wide, so a
-    mistake caught once becomes a standing instruction rather than being
-    forgotten the moment the conversation ends. Not model fine-tuning -
-    this is prompt-level accumulated correction, the practical way to
-    "learn from mistakes" without retraining weights.
-    """
-    question = models.TextField()
-    flawed_answer = models.TextField()
-    lesson = models.TextField(help_text="Short, general instruction derived from the mistake.")
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["-created_at"]
-
-    def __str__(self):
-        return self.lesson[:80]

@@ -133,7 +133,7 @@ def keyword_search_chunks(
     additive: search_similar_chunks/search_firm_chunks above (used by the
     tuned deterministic RAG pipeline) are untouched - this is a new,
     separate function used only where a caller explicitly wants a hybrid
-    search (see agent_tools.py). No native relevance score exists for a
+    search (see chat/tools/documents.py). No native relevance score exists for a
     literal substring match, so results get a synthetic best-possible
     score of 0.0 - a real string match is a strong signal in its own
     right, distinct from vector distance.

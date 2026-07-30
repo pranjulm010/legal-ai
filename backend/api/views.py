@@ -1,9 +1,7 @@
-import re
 import threading
 from pathlib import Path
 from typing import List, Optional
 
-import groq
 from ninja import NinjaAPI, File, Form
 from ninja.files import UploadedFile
 import requests
@@ -17,9 +15,7 @@ from accounts.rate_limit import rate_limit_exceeded
 from cases.models import CaseActivity
 from .models import UploadedDocument, ChatMessage, ChatSession
 from .schemas import (
-    AskQuestionSchema,
     UploadDocumentResponseSchema,
-    AskQuestionResponseSchema,
     ChatHistoryResponseSchema,
     ChatSearchResponseSchema,
     ChatSessionDetailSchema,
@@ -50,32 +46,11 @@ from rag.document_intelligence import (
     summarize_document,
 )
 from rag.document_processor import extract_text_from_document
-from rag.rag_pipeline import process_uploaded_document, answer_question, answer_general_question
-from rag.research_agent import run_research_agent, run_agent
+from rag.rag_pipeline import process_uploaded_document
 from rag.vector_store import delete_document_chunks
 
 
 api = NinjaAPI(title="Legal AI RAG API")
-
-
-# A question asked WHILE a document is attached that refers to "this type of
-# case", "such/similar a case", "cases like this", or "have we handled ...
-# this/such/similar case" is about the ATTACHED document's subject, not a
-# firm-wide meta breakdown. Reproduced live: with a case file attached, "is
-# it we handle this type of case earlier" got hijacked by the firm-stats
-# shortcut into a blind category breakdown that ignored the document
-# entirely. When this matches and a document is attached, skip the firm-wide
-# shortcut so the document-aware agent can read the file, identify its case
-# type, and cross-reference the firm's own cases before answering.
-_DOC_RELATIVE_CASE_RE = re.compile(
-    r"\bthis\s+(?:type|kind|sort)\s+of\s+case\b"
-    r"|\b(?:such|similar)\s+(?:a\s+)?cases?\b"
-    r"|\bcases?\s+like\s+this\b"
-    r"|\blike\s+this\s+case\b"
-    r"|\bhandled?\b.*\b(?:this|such|similar)\b.*\bcase"
-    r"|\bcase\b.*\b(?:before|earlier|previously)\b",
-    re.I,
-)
 
 
 SUPPORTED_DOCUMENT_TYPES = [
@@ -287,416 +262,8 @@ def upload_document(
         "total_chunks": 0,
         "status": "processing",
     }
-def _is_resumable_session(session) -> bool:
-    """Only a firm's 5 most recently active chat sessions can be resumed -
-    older ones stay visible/searchable in Knowledge but no longer accept
-    follow-ups, keeping conversation context bounded."""
-    resumable_ids = set(
-        ChatSession.objects.filter(firm=session.firm)
-        .order_by("-updated_at")
-        .values_list("id", flat=True)[:5]
-    )
-    return session.id in resumable_ids
 
 
-@api.post(
-    "/ask-question/",
-    auth=JWTAuth(),
-    response={
-        200: AskQuestionResponseSchema,
-        400: ErrorResponseSchema,
-        403: ErrorResponseSchema,
-        404: ErrorResponseSchema,
-        429: ErrorResponseSchema,
-        500: ErrorResponseSchema,
-    },
-)
-def ask_question(request, payload: AskQuestionSchema):
-    # The agent/RAG path involves LLM calls (sometimes several, per tool
-    # use) - cap requests per account so one abusive session can't drive
-    # unbounded LLM cost or starve the shared embedding model for every
-    # other firm.
-    rate_key = f"ask-question:{request.auth.id}"
-    if rate_limit_exceeded(rate_key, limit=30, window_seconds=60):
-        return 429, {"error": "Too many questions in a short time. Please wait a moment and try again."}
-
-    question = payload.question
-    document_id = payload.document_id
-
-    if not question or not question.strip():
-        return 400, {
-            "error": "Question is required."
-        }
-
-    # Retrieval always follows the firm-first priority pipeline: search the
-    # firm's own knowledge base first, then fall through automatically to
-    # trusted/web sources, and only then to the model's general knowledge.
-    # Selecting the source is the engine's job, not the user's - there is no
-    # manual firm/web toggle, and the web step no longer waits for a
-    # confirmation click (allow_web_search is always on so the fallthrough is
-    # automatic).
-    firm_only = False
-    allow_web_search = True
-
-    document = None
-
-    if document_id:
-        try:
-            document = UploadedDocument.objects.get(document_id=document_id)
-
-        except UploadedDocument.DoesNotExist:
-            return 404, {
-                "error": "Document not found."
-            }
-
-        if document.firm_id != request.auth.firm_id:
-            return 403, {
-                "error": "You do not have access to this document."
-            }
-
-        if document.status == "processing":
-            return 400, {
-                "error": "This document is still being processed. Please wait a moment and try again.",
-            }
-
-        if document.status == "failed":
-            return 400, {
-                "error": "This document failed to process and can't be searched.",
-                "details": document.error_message,
-            }
-
-    session = None
-
-    if payload.chat_session_id:
-        try:
-            session = ChatSession.objects.get(
-                id=payload.chat_session_id, firm=request.auth.firm
-            )
-        except ChatSession.DoesNotExist:
-            return 404, {"error": "Chat session not found."}
-
-        if not _is_resumable_session(session):
-            return 400, {"error": "Only your 5 most recent chats can be resumed. Start a new chat instead."}
-
-    # Resuming a session carries its prior Q&A as real conversation turns,
-    # so follow-ups like "explain that" or "compare it" make sense.
-    history = None
-    if session is not None:
-        prior = list(
-            session.messages.order_by("created_at").values("question", "answer")
-        )
-        if prior:
-            # Only carry the last few turns, with long answers truncated, into
-            # the model's context. The default agent's system prompt is already
-            # large relative to the model's per-request token budget, so an
-            # unbounded conversation (a full web-search answer is easily 1-2k
-            # tokens each) blows the limit and makes a mid-conversation question
-            # fail while the same question in a fresh chat succeeds. A few
-            # recent, truncated turns are enough for follow-ups like "explain
-            # that" without pushing the request over the limit.
-            recent = prior[-4:]
-            history = [
-                {
-                    "question": (turn["question"] or "")[:500],
-                    "answer": (
-                        (turn["answer"][:700] + " …")
-                        if turn["answer"] and len(turn["answer"]) > 700
-                        else (turn["answer"] or "")
-                    ),
-                }
-                for turn in recent
-            ]
-
-    try:
-        # Meta-questions about the firm's own data ("how many lawyers",
-        # "what's in my drive") must be answered from the database even
-        # when a document happens to be selected - selecting a document
-        # only scopes *legal-content* questions to it, it doesn't turn
-        # every question into one about that document's text.
-        #
-        # This shortcut only ever answers with FIRM-WIDE totals/listings -
-        # it has no concept of case scoping. Reproduced live: asking "show
-        # documents/reminders/contacts/lawyers linked to this case" while
-        # case_id was set matched this shortcut's generic patterns and
-        # silently returned the whole firm's data instead of just this
-        # case's - directly contradicting the correct, case-scoped answer
-        # the agent's get_case_info tool gives for the same case in the
-        # same conversation. When a case is in scope, skip this firm-wide
-        # shortcut and let the case-aware agent (which resolves
-        # documents/reminders/contacts/lawyers actually linked to THIS
-        # case via get_case_info) handle it instead.
-        from rag.firm_stats import try_answer_firm_stats
-
-        # "Single result rule": once a query has narrowed the conversation
-        # down to one specific case (e.g. "how many open cases" -> exactly
-        # one), that case is remembered on the session (see active_case
-        # updates below) and treated the same as an explicitly-opened
-        # case page for the rest of this conversation - a bare follow-up
-        # like "what is it about?"/"who is the client?" then resolves to
-        # it without asking the user to repeat its name, AND the firm-wide
-        # stats shortcut is correctly skipped for it the same way it
-        # already is for an explicit case_id (see the comment below).
-        effective_case_id = payload.case_id or (session.active_case_id if session else None)
-
-        # "Collection follow-up rule": a bare "what are they?"/"show
-        # them"/"list them" after a firm-stats answer that named a count
-        # or list of something should reuse that same collection instead
-        # of being treated as a brand-new, unresolvable search - see
-        # _resolve_collection_followup's own docstring for the exact
-        # mechanism. Only the STATS lookup uses the rewritten text; the
-        # user's actual message is still what's stored/shown below.
-        from rag.firm_stats import _resolve_collection_followup
-
-        stats_query_text = _resolve_collection_followup(question, history) or question
-
-        # A document-relative "do we handle this type of case" question must
-        # NOT be answered by the firm-wide stats shortcut (which would give a
-        # blind category breakdown ignoring the attached document); let the
-        # document-aware agent handle it instead - see _DOC_RELATIVE_CASE_RE.
-        doc_relative = document is not None and bool(_DOC_RELATIVE_CASE_RE.search(question))
-
-        # Semantic-first routing: one intent-router call understands what the
-        # user actually wants (an aggregate firm-data question, a genuinely
-        # ambiguous request that needs clarifying, or something for the
-        # agent), instead of relying on keyword/regex matching. The result is
-        # reused by try_answer_firm_stats below so the router runs only once.
-        stats_answer = None
-        resolved_case_id = None
-        is_cases_query = False
-        clarification = None
-
-        # When the conversation is already scoped to one specific case, routing
-        # always goes to the case-aware agent - so the router call would be
-        # wasted. Only run it when a top-level routing decision is actually
-        # needed (no active case).
-        if not effective_case_id:
-            from rag.groq_client import classify_intent
-
-            classification = classify_intent(
-                stats_query_text,
-                history=history,
-                has_document=document is not None,
-                has_case=False,
-            )
-
-            # Only ask a clarifying question when the intent is genuinely
-            # ambiguous (the router is instructed to be conservative and to
-            # lean away from clarify when a document is attached).
-            if classification.get("intent") == "clarify":
-                clarification = str(classification.get("clarification_question", "")).strip() or None
-
-            if clarification is None and not doc_relative:
-                stats_answer, resolved_case_id, is_cases_query = try_answer_firm_stats(
-                    stats_query_text, request.auth.firm, classification=classification
-                )
-
-        if clarification is not None:
-            result = {
-                "answer": clarification,
-                "sources": [],
-                "needs_web_confirmation": False,
-                "route": "clarification",
-                "confidence_level": None,
-            }
-        elif stats_answer is not None:
-            result = {
-                "answer": stats_answer,
-                "sources": [],
-                "needs_web_confirmation": False,
-                "route": "firm_database",
-                "confidence_level": "High",
-            }
-            document = None
-        elif payload.use_advanced_agent or effective_case_id:
-            # The tool-calling agent, used when explicitly requested OR whenever
-            # a specific case is in scope (opened directly, or remembered from a
-            # "single result" earlier in the chat). It's the only path that is
-            # case-aware - its get_case_info tool answers case follow-ups like
-            # "can you describe" / "who is the client" about THIS case. The fast
-            # deterministic pipeline has no case context, so without this a case
-            # follow-up would lose the case and fall through to web search
-            # (reproduced live: "are we faced any theft case?" -> "1 criminal
-            # case", then "can you describe" wrongly web-searched). Non-case
-            # questions still take the fast deterministic path below.
-            result = run_agent(
-                question=question,
-                firm=request.auth.firm,
-                role=request.auth.role,
-                created_by=request.auth,
-                document_id=str(document.document_id) if document is not None else None,
-                case_id=effective_case_id,
-                allow_web_search=allow_web_search,
-                answer_mode=payload.answer_mode,
-                region=payload.region or request.auth.firm.default_region,
-                history=history,
-                firm_only=firm_only,
-            )
-        elif document is not None:
-            if payload.use_agent:
-                result = run_research_agent(
-                    question=question,
-                    document_id=str(document.document_id),
-                    firm_id=document.firm_id,
-                    allow_web_search=allow_web_search,
-                    answer_mode=payload.answer_mode,
-                    firm_only=firm_only,
-                )
-            else:
-                result = answer_question(
-                    question=question,
-                    document_id=str(document.document_id),
-                    firm_id=document.firm_id,
-                    role=request.auth.role,
-                    allow_web_search=allow_web_search,
-                    answer_mode=payload.answer_mode,
-                    history=history,
-                    region=payload.region or request.auth.firm.default_region,
-                    firm_only=firm_only,
-                )
-        else:
-            # No document selected and not a stats question - search the
-            # firm's documents (uploads + Drive-synced), then web (with consent).
-            result = answer_general_question(
-                question=question,
-                firm=request.auth.firm,
-                role=request.auth.role,
-                allow_web_search=allow_web_search,
-                answer_mode=payload.answer_mode,
-                history=history,
-                region=payload.region or request.auth.firm.default_region,
-                firm_only=firm_only,
-            )
-
-        if result.get("needs_web_confirmation"):
-            return 200, {
-                "question": question,
-                "answer": result.get("answer", ""),
-                "sources": [],
-                "chat_id": None,
-                "chat_session_id": session.id if session else None,
-                "needs_web_confirmation": True,
-                "research_steps": result.get("research_steps"),
-            }
-
-        answer = result.get("answer", "")
-        sources = result.get("sources", [])
-
-        if session is None:
-            session = ChatSession.objects.create(
-                firm=request.auth.firm,
-                started_by=request.auth,
-                title=question.strip()[:255],
-                document=document,
-            )
-        else:
-            ChatSession.objects.filter(id=session.id).update(updated_at=timezone.now())
-
-        # "Single result rule" bookkeeping (continued from effective_case_id
-        # above): remember the one case this turn resolved to, so a bare
-        # follow-up next turn ("what is it about?", "who is the client?")
-        # can use it without the user repeating its name.
-        if is_cases_query:
-            # The firm-stats shortcut ran and touched cases - set to
-            # whatever it resolved to (None correctly CLEARS a stale
-            # active case when the result was ambiguous/zero, per the
-            # "multiple results rule").
-            session.active_case_id = resolved_case_id
-            session.save(update_fields=["active_case"])
-        else:
-            # Otherwise, only update when the agent itself confirmed a
-            # case via get_case_info this turn (its "_sources" always
-            # includes {"source_type": "case", "case_id": ...} on
-            # success) - never clear active_case just because this turn
-            # didn't happen to touch case info at all.
-            agent_case_id = next(
-                (s.get("case_id") for s in sources if s.get("source_type") == "case" and s.get("case_id")),
-                None,
-            )
-            if agent_case_id:
-                session.active_case_id = agent_case_id
-                session.save(update_fields=["active_case"])
-
-        chat = ChatMessage.objects.create(
-            session=session,
-            document=document,
-            firm=request.auth.firm,
-            question=question,
-            answer=answer,
-        )
-
-        return 200, {
-            "question": question,
-            "answer": answer,
-            "sources": sources,
-            "chat_id": chat.id,
-            "chat_session_id": session.id,
-            "needs_web_confirmation": False,
-            "research_steps": result.get("research_steps"),
-            "route": result.get("route"),
-            "confidence_level": result.get("confidence_level"),
-        }
-
-    except groq.APIStatusError as error:
-        # A 413 "request too large" means the accumulated context (system rules
-        # + this conversation's history + retrieved evidence) exceeded the
-        # model's per-request token limit. This can happen in a long chat even
-        # though the same question works in a fresh one. Return a clear,
-        # actionable 200 message instead of a generic 500 so the user knows to
-        # start a new chat rather than thinking the app is broken. Any other
-        # provider status error falls through to the generic handler below.
-        if getattr(error, "status_code", None) == 413:
-            return 200, {
-                "question": question,
-                "answer": (
-                    "This conversation has grown too long for me to process in a "
-                    "single request. Please start a new chat (or ask your question "
-                    "more briefly) and I'll be able to answer it."
-                ),
-                "sources": [],
-                "chat_id": None,
-                "chat_session_id": session.id if session else None,
-                "needs_web_confirmation": False,
-                "research_steps": None,
-            }
-        # A 429 means the LLM provider's rate/usage limit was hit (per-minute
-        # requests, or the account's daily token budget). It's transient and
-        # recovers on its own, so show a clear, calm message telling the user
-        # to retry shortly - never a generic 500 that reads like the app broke,
-        # and never the raw provider error (it leaks org ID, token counts and a
-        # billing URL). Returned as a 200 answer bubble so it renders inline,
-        # the same way the 413 case above does.
-        if getattr(error, "status_code", None) == 429:
-            return 200, {
-                "question": question,
-                "answer": (
-                    "The AI service has hit its usage limit for the moment. "
-                    "Please wait a little while and try again - this clears on "
-                    "its own shortly."
-                ),
-                "sources": [],
-                "chat_id": None,
-                "chat_session_id": session.id if session else None,
-                "needs_web_confirmation": False,
-                "research_steps": None,
-            }
-        print(f"ASK QUESTION ERROR: {error}")
-        return 500, {
-            "error": "Something went wrong while generating the answer. Please try again in a moment.",
-            "details": None,
-        }
-
-    except Exception as error:
-        # Reproduced live: an upstream LLM provider error (e.g. a Groq
-        # rate-limit response) was being forwarded to the client verbatim
-        # via str(error) - which for a provider error includes internal
-        # details never meant for an end user (org ID, exact token usage,
-        # a billing URL). Log the real error server-side for debugging,
-        # but only ever show the user a generic, safe message.
-        print(f"ASK QUESTION ERROR: {error}")
-        return 500, {
-            "error": "Something went wrong while generating the answer. Please try again in a moment.",
-            "details": None,
-        }
 @api.get(
     "/documents/chats/search/",
     auth=JWTAuth(),
@@ -755,14 +322,14 @@ def search_chat_history(request, q: str = ""):
 )
 def list_chat_sessions(request):
     """
-    A user's resumable chat history, ChatGPT-style - only the 5 most
-    recently active sessions (matches the resume limit enforced on the
-    detail/ask-question endpoints), newest first.
+    A user's resumable chat history, ChatGPT-style - most recently active
+    first. Any session can be resumed; the new pipeline windows history
+    itself, so there is no resume limit anymore.
     """
 
     sessions = (
         ChatSession.objects.filter(firm=request.auth.firm)
-        .order_by("-updated_at")[:5]
+        .order_by("-updated_at")[:20]
     )
 
     results = []
@@ -805,10 +372,16 @@ def get_chat_session(request, session_id: int):
     if session.firm_id != request.auth.firm_id:
         return 403, {"error": "You do not have access to this chat session."}
 
-    if not _is_resumable_session(session):
-        return 400, {"error": "Only your 5 most recent chats can be resumed."}
+    messages = list(session.messages.order_by("created_at"))
 
-    messages = session.messages.order_by("created_at")
+    # The requester's own thumbs ratings, so reopening a chat shows them.
+    from chat.models import MessageFeedback
+
+    feedback_by_message = dict(
+        MessageFeedback.objects.filter(
+            message__in=messages, user=request.auth
+        ).values_list("message_id", "rating")
+    )
 
     return 200, {
         "id": session.id,
@@ -816,7 +389,15 @@ def get_chat_session(request, session_id: int):
         "document_id": str(session.document.document_id) if session.document_id else None,
         "document_name": session.document.original_name if session.document_id else None,
         "messages": [
-            {"id": m.id, "question": m.question, "answer": m.answer, "created_at": m.created_at}
+            {
+                "id": m.id,
+                "question": m.question,
+                "answer": m.answer,
+                "created_at": m.created_at,
+                "route": m.route,
+                "sources": m.sources or [],
+                "my_feedback": feedback_by_message.get(m.id),
+            }
             for m in messages
         ],
     }

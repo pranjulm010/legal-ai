@@ -15,6 +15,7 @@ ROLE_PERMISSIONS = {
         "delete_document",
         "delete_chat",
         "manage_contacts",
+        "manage_forms",
     },
     "partner": {
         "create_case",
@@ -27,6 +28,7 @@ ROLE_PERMISSIONS = {
         "delete_document",
         "delete_chat",
         "manage_contacts",
+        "manage_forms",
     },
     "associate": {
         "create_case",
