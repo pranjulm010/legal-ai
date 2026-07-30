@@ -4,6 +4,7 @@ over the firm's uploaded documents. Threshold-free by design - results
 carry their match distances and the model judges relevance itself.
 """
 import re
+from itertools import zip_longest
 from typing import Dict, List, Optional
 
 from rag.retriever import retrieve_context, retrieve_firm_context
@@ -81,19 +82,31 @@ def extract_keyword_terms(query: str, max_terms: int = 3) -> List[str]:
 
 
 def merge_hybrid_chunks(vector_chunks: List[Dict], keyword_chunks: List[Dict], top_k: int) -> List[Dict]:
-    """Keyword (exact-match) hits are surfaced first - a literal string
-    match is at least as strong a signal as vector similarity - then
-    vector hits fill the rest, deduped by (document_id, chunk_id)."""
+    """Interleaves keyword (exact-match) and vector hits one-for-one rather
+    than surfacing all keyword hits before any vector hit. A literal string
+    match is at least as strong a signal as vector similarity, so it still
+    gets first look each round - but a firm with many near-duplicate
+    documents (the same template uploaded repeatedly) can produce enough
+    keyword hits on a common term to fill the entire top_k budget by
+    itself, silently dropping every vector result - including the
+    single best-ranked, most relevant one. Interleaving guarantees the
+    top vector hit always survives regardless of how many keyword hits
+    exist. Deduped by (document_id, chunk_id)."""
     seen = set()
     merged = []
-    for chunk in keyword_chunks + vector_chunks:
-        metadata = chunk.get("metadata", {})
-        key = (metadata.get("document_id"), metadata.get("chunk_id"))
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(chunk)
-    return merged[:top_k]
+    for keyword_chunk, vector_chunk in zip_longest(keyword_chunks, vector_chunks):
+        for chunk in (keyword_chunk, vector_chunk):
+            if chunk is None:
+                continue
+            metadata = chunk.get("metadata", {})
+            key = (metadata.get("document_id"), metadata.get("chunk_id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(chunk)
+            if len(merged) >= top_k:
+                return merged
+    return merged
 
 
 def _keyword_search_scoped(

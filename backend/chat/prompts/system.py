@@ -46,6 +46,13 @@ def build_system_prompt(
             "Prefer one well-chosen call over many speculative ones. When "
             "tool results are empty or irrelevant, say what you looked for "
             "and what you did or didn't find; never pad the gap with guesses.",
+            "- A named person, company, or term can exist ONLY inside an "
+            "uploaded document's text (a party to an agreement, a witness, a "
+            "signatory) with no case, client, or contact record at all. "
+            "Before telling the user someone/something 'isn't in the firm's "
+            "records', a case/client/contact lookup coming up empty is not "
+            "enough - also search_documents (the firm's document text) if you "
+            "haven't already, since that is a separate store from case data.",
         ]
 
     memory_lines = []

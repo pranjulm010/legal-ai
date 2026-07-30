@@ -1095,6 +1095,9 @@ export interface DocumentListItem {
   case_title: string | null;
   uploaded_at: string;
   source: "upload" | "drive";
+  status: "processing" | "ready" | "failed" | string;
+  error_message?: string;
+  version_number?: number;
 }
 
 export interface EntityExtraction {
@@ -1146,6 +1149,14 @@ export const renameDocument = async (
   const response = await api.patch(`/documents/${documentId}/rename/`, {
     file_name: fileName,
   });
+  return response.data;
+};
+
+// Force a document back through chunking/embedding without re-uploading it -
+// used by the "Force re-run" button on the Documents page to retry a
+// "failed" document or refresh its RAG chunks.
+export const reprocessDocument = async (documentId: string): Promise<DocumentStatus> => {
+  const response = await api.post(`/documents/${documentId}/reprocess/`);
   return response.data;
 };
 

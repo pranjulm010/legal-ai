@@ -86,7 +86,10 @@ def _case_summary(case) -> Dict:
         "an existing matter (semantic search over case titles, types, "
         "clients, and descriptions, plus exact name matches). Use when the "
         "user asks about similar/related/comparable cases or whether the "
-        "firm has handled something like this before."
+        "firm has handled something like this before. This only searches "
+        "case records, never uploaded documents' text - a name or term with "
+        "no case match may still exist only inside a document; use "
+        "search_documents for that."
     ),
     parameters={
         "type": "object",

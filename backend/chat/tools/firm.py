@@ -8,7 +8,10 @@ from .registry import ToolContext, ToolResult, result_json, tool
         "type (with titles), lawyers, upcoming reminders, and document/"
         "draft/contact totals. Use for any question about the firm's own "
         "records - how many cases, which are open, who works here, "
-        "upcoming deadlines - then answer using the exact numbers returned."
+        "upcoming deadlines - then answer using the exact numbers returned. "
+        "This does NOT search inside uploaded documents' text - a name or "
+        "term absent here may still exist only inside a document; use "
+        "search_documents for that."
     ),
     parameters={"type": "object", "properties": {}},
 )

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -9,7 +9,9 @@ import {
   getDocumentContent,
   listDocuments,
   renameDocument,
+  reprocessDocument,
   updateDocumentContent,
+  waitForDocumentReady,
   type DocumentListItem,
 } from "@/lib/api";
 
@@ -17,6 +19,32 @@ const PAGE_SIZE = 10;
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+const RAG_STATUS_STYLES: Record<string, string> = {
+  ready: "bg-emerald-500/10 text-emerald-300",
+  processing: "bg-amber-500/10 text-amber-300",
+  failed: "bg-red-500/10 text-red-300",
+};
+
+const RAG_STATUS_LABELS: Record<string, string> = {
+  ready: "RAG: Ready",
+  processing: "RAG: Processing...",
+  failed: "RAG: Failed",
+};
+
+function RagStatusBadge({ doc }: { doc: DocumentListItem }) {
+  const status = doc.status || "ready";
+  return (
+    <span
+      title={status === "failed" ? doc.error_message || "Processing failed." : undefined}
+      className={`rounded-full px-2 py-0.5 text-[10px] font-normal ${
+        RAG_STATUS_STYLES[status] || "bg-[#8a7c68]/10 text-[#8a7c68]"
+      }`}
+    >
+      {RAG_STATUS_LABELS[status] || status}
+    </span>
+  );
 }
 
 export default function DocumentsPage() {
@@ -43,17 +71,71 @@ export default function DocumentsPage() {
   const [comparing, setComparing] = useState(false);
   const [compareResult, setCompareResult] = useState<string | null>(null);
 
+  const [rerunningIds, setRerunningIds] = useState<Set<string>>(new Set());
+  const pollingIds = useRef<Set<string>>(new Set());
+
+  const updateDocumentInList = (documentId: string, patch: Partial<DocumentListItem>) => {
+    setDocuments((prev) =>
+      prev.map((doc) => (doc.document_id === documentId ? { ...doc, ...patch } : doc))
+    );
+  };
+
+  // Watches a document that's mid-embed (just uploaded, edited, or force
+  // re-run) and updates its badge in place once the background pipeline
+  // finishes, instead of requiring a manual page refresh to find out.
+  const pollDocumentStatus = (documentId: string) => {
+    if (pollingIds.current.has(documentId)) return;
+    pollingIds.current.add(documentId);
+    waitForDocumentReady(documentId)
+      .then((result) => {
+        updateDocumentInList(documentId, {
+          status: result.status,
+          error_message: result.error_message,
+        });
+      })
+      .catch(() => {
+        // Still processing after the polling budget - leave the badge as
+        // "processing"; the next full list load will pick up the truth.
+      })
+      .finally(() => {
+        pollingIds.current.delete(documentId);
+      });
+  };
+
   const load = (tag?: string) => {
     setLoading(true);
     setPage(1);
     listDocuments(tag ? { tag } : undefined)
-      .then(setDocuments)
+      .then((docs) => {
+        setDocuments(docs);
+        docs.filter((doc) => doc.status === "processing").forEach((doc) => pollDocumentStatus(doc.document_id));
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     load();
   }, []);
+
+  const handleForceRerun = async (doc: DocumentListItem) => {
+    setRerunningIds((prev) => new Set(prev).add(doc.document_id));
+    try {
+      const result = await reprocessDocument(doc.document_id);
+      updateDocumentInList(doc.document_id, {
+        status: result.status,
+        error_message: result.error_message,
+      });
+      pollDocumentStatus(doc.document_id);
+    } catch {
+      alert("Could not start re-processing. Please try again.");
+    } finally {
+      setRerunningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(doc.document_id);
+        return next;
+      });
+    }
+  };
 
   const handleFilter = (event: React.FormEvent) => {
     event.preventDefault();
@@ -247,13 +329,14 @@ export default function DocumentsPage() {
                         </button>
                       </div>
                     ) : (
-                      <p className="flex items-center gap-2 font-medium text-[#e0d2ba]">
+                      <p className="flex flex-wrap items-center gap-2 font-medium text-[#e0d2ba]">
                         {doc.file_name}
                         {doc.source === "drive" && (
                           <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-normal text-blue-300">
                             📁 Google Drive
                           </span>
                         )}
+                        <RagStatusBadge doc={doc} />
                       </p>
                     )}
                     <p className="text-xs text-[#8a7c68]">
@@ -275,6 +358,14 @@ export default function DocumentsPage() {
                         className="rounded-lg border border-[#c9a96e]/25 px-2 py-1 text-xs text-[#c9a96e] hover:bg-[#c9a96e]/10"
                       >
                         Rename
+                      </button>
+                      <button
+                        onClick={() => handleForceRerun(doc)}
+                        disabled={doc.status === "processing" || rerunningIds.has(doc.document_id)}
+                        title="Re-run chunking and embedding for this document"
+                        className="rounded-lg border border-[#c9a96e]/25 px-2 py-1 text-xs text-[#c9a96e] hover:bg-[#c9a96e]/10 disabled:opacity-50"
+                      >
+                        {rerunningIds.has(doc.document_id) ? "Starting..." : "Force re-run"}
                       </button>
                     </>
                   )}

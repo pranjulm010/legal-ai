@@ -484,6 +484,7 @@ def list_documents(request, tag: Optional[str] = None, case_id: Optional[int] = 
             "uploaded_at": document.uploaded_at,
             "source": document.source,
             "status": document.status,
+            "error_message": document.error_message,
             "version_number": document.version_number,
         }
         for document in documents.order_by("-uploaded_at")
@@ -513,6 +514,7 @@ def update_document_tags(request, document_id: str, payload: DocumentTagsUpdateS
         "uploaded_at": document.uploaded_at,
         "source": document.source,
         "status": document.status,
+        "error_message": document.error_message,
         "version_number": document.version_number,
     }
 
@@ -561,6 +563,7 @@ def rename_document(request, document_id: str, payload: DocumentRenameSchema):
         "uploaded_at": document.uploaded_at,
         "source": document.source,
         "status": document.status,
+        "error_message": document.error_message,
         "version_number": document.version_number,
     }
 
@@ -703,6 +706,64 @@ def get_document_status(request, document_id: str):
     document, error = _get_owned_document(request, document_id)
     if error:
         return error
+
+    return 200, {
+        "document_id": str(document.document_id),
+        "status": document.status,
+        "total_chunks": document.total_chunks,
+        "error_message": document.error_message,
+    }
+
+
+@api.post(
+    "/documents/{document_id}/reprocess/",
+    auth=JWTAuth(),
+    response={
+        200: DocumentStatusSchema,
+        400: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+    },
+)
+def reprocess_document(request, document_id: str):
+    """
+    Force a document through chunking/embedding again without re-uploading
+    it - lets a lawyer retry a "failed" document, or refresh RAG chunks for
+    one that looks stale, straight from the Documents page. Mirrors
+    update_document_content's re-embed flow: old chunks are dropped first
+    so a slow/failed retry can never leave stale chunks sitting next to
+    fresh ones, then the same background pipeline used for a fresh upload
+    runs again.
+    """
+    document, error = _get_owned_document(request, document_id)
+    if error:
+        return error
+
+    denied = require_permission(request, "edit_document")
+    if denied:
+        return denied
+
+    if document.status == "processing":
+        return 400, {"error": "This document is already being processed."}
+
+    document.status = "processing"
+    document.error_message = ""
+    document.save(update_fields=["status", "error_message"])
+
+    delete_document_chunks(document_id=str(document.document_id), firm_id=document.firm_id)
+
+    threading.Thread(
+        target=_process_document_in_background,
+        args=(document.id,),
+        daemon=True,
+    ).start()
+
+    log_audit_event(
+        firm=request.auth.firm,
+        actor=request.auth,
+        action="document_reprocessed",
+        details=f"Force re-ran RAG processing for document: {document.original_name}",
+    )
 
     return 200, {
         "document_id": str(document.document_id),

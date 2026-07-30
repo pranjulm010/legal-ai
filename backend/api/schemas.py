@@ -37,6 +37,7 @@ class DocumentListItemSchema(Schema):
     uploaded_at: datetime
     source: str
     status: str = "ready"
+    error_message: str = ""
     version_number: int = 1
 
 
