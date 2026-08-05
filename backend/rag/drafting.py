@@ -47,7 +47,7 @@ def analyze_template(document_text: str) -> Dict:
     truncated_text = document_text[:MAX_DOCUMENT_CHARS_FOR_TEMPLATE]
 
     system_prompt = """
-You are an Indian legal AI that reverse-engineers a reusable drafting template
+You are a US legal AI that reverse-engineers a reusable drafting template
 from one sample legal document.
 
 Return ONLY a JSON object of this exact form:
@@ -215,11 +215,11 @@ def generate_draft(
     client = get_groq_client()
 
     system_prompt = """
-You are an Indian legal AI drafting assistant.
+You are a US legal AI drafting assistant.
 
 Rules:
 1. Draft a complete, professional legal document or clause based on the user's instruction.
-2. Use standard Indian legal drafting conventions and formatting.
+2. Use standard US legal drafting conventions and formatting.
 3. Do not invent specific facts (names, dates, amounts) beyond what the user provided - use clearly marked placeholders like [PARTY NAME] or [DATE] where information is missing.
 4. Keep the draft structured with clear headings/clauses where appropriate.
 5. Output PLAIN TEXT only - do NOT use Markdown syntax. No '#'/'##' heading
@@ -271,7 +271,7 @@ def generate_redline_suggestions(document_text: str, instructions: str = "") -> 
     truncated_text = document_text[:MAX_DOCUMENT_CHARS_FOR_REDLINE]
 
     system_prompt = """
-You are an Indian legal AI assistant performing a redline review of a document.
+You are a US legal AI assistant performing a redline review of a document.
 
 Return ONLY a JSON object of this exact form:
 {"suggestions": [{"original_text": "...", "suggested_text": "...", "reason": "..."}]}

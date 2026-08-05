@@ -49,7 +49,7 @@ class Firm(models.Model):
     default_region = models.CharField(
         max_length=20,
         choices=REGION_CHOICES,
-        default="india",
+        default="usa",
         help_text="Jurisdiction used for web search when a question doesn't specify one.",
     )
 

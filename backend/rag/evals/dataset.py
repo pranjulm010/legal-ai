@@ -78,7 +78,7 @@ GOLDEN_CASES: List[EvalCase] = [
         kind=KIND_ANSWERABLE,
         question="Which courts have jurisdiction over disputes under this NDA?",
         expected_snippets=["exclusive jurisdiction"],
-        expected_facts=["The courts at Bengaluru, Karnataka have exclusive jurisdiction."],
+        expected_facts=["The courts located in Travis County, Texas have exclusive jurisdiction."],
     ),
     EvalCase(
         id="nda-parties",
@@ -87,8 +87,8 @@ GOLDEN_CASES: List[EvalCase] = [
         question="Who are the disclosing and receiving parties?",
         expected_snippets=["Vertex Consulting", "Orion Softworks"],
         expected_facts=[
-            "Vertex Consulting Pvt. Ltd. is the Disclosing Party.",
-            "Orion Softworks LLP is the Receiving Party.",
+            "Vertex Consulting LLC is the Disclosing Party.",
+            "Orion Softworks LLC is the Receiving Party.",
         ],
     ),
     EvalCase(
@@ -106,17 +106,17 @@ GOLDEN_CASES: List[EvalCase] = [
         doc="rental",
         kind=KIND_ANSWERABLE,
         question="What is the monthly rent for the premises?",
-        expected_snippets=["35,000"],
-        expected_facts=["The monthly rent is Rs. 35,000."],
+        expected_snippets=["$1,800"],
+        expected_facts=["The monthly rent is $1,800."],
     ),
     EvalCase(
         id="rental-deposit",
         doc="rental",
         kind=KIND_ANSWERABLE,
         question="How much is the security deposit and when is it refunded?",
-        expected_snippets=["1,05,000", "thirty (30) days"],
+        expected_snippets=["$5,400", "thirty (30) days"],
         expected_facts=[
-            "The security deposit is Rs. 1,05,000 (three months' rent).",
+            "The security deposit is $5,400 (three months' rent).",
             "It is refundable within thirty (30) days of vacating the premises.",
         ],
     ),
@@ -125,8 +125,8 @@ GOLDEN_CASES: List[EvalCase] = [
         doc="rental",
         kind=KIND_ANSWERABLE,
         question="What is the tenancy period?",
-        expected_snippets=["eleven (11) months"],
-        expected_facts=["The tenancy is for eleven (11) months, renewable by mutual written consent."],
+        expected_snippets=["twelve (12) months"],
+        expected_facts=["The tenancy is for twelve (12) months, renewable by mutual written consent."],
     ),
     EvalCase(
         id="rental-late-fee",
@@ -141,9 +141,9 @@ GOLDEN_CASES: List[EvalCase] = [
         doc="rental",
         kind=KIND_ANSWERABLE,
         question="Who pays for minor repairs, and up to what amount is the tenant responsible?",
-        expected_snippets=["Rs. 2,000"],
+        expected_snippets=["$150"],
         expected_facts=[
-            "The tenant is responsible for minor repairs up to Rs. 2,000 per instance.",
+            "The tenant is responsible for minor repairs up to $150 per instance.",
             "Major structural repairs are the landlord's responsibility.",
         ],
     ),
@@ -156,7 +156,7 @@ GOLDEN_CASES: List[EvalCase] = [
         history=[
             {
                 "question": "What is the monthly rent for the premises?",
-                "answer": "The monthly rent is Rs. 35,000, payable in advance.",
+                "answer": "The monthly rent is $1,800, payable in advance.",
             },
         ],
         expected_snippets=["5th day"],
@@ -169,8 +169,8 @@ GOLDEN_CASES: List[EvalCase] = [
         doc="employment",
         kind=KIND_ANSWERABLE,
         question="What is the employee's annual salary?",
-        expected_snippets=["18,00,000"],
-        expected_facts=["The gross annual salary is Rs. 18,00,000 (Eighteen Lakh)."],
+        expected_snippets=["135,000"],
+        expected_facts=["The gross annual salary is $135,000 (One Hundred Thirty-Five Thousand Dollars)."],
     ),
     EvalCase(
         id="emp-probation",
@@ -234,10 +234,10 @@ GOLDEN_CASES: List[EvalCase] = [
 
     # ---- General-knowledge legal question (no document answer) ------------
     EvalCase(
-        id="gk-ipc-theft",
+        id="gk-theft-punishment",
         doc=None,
         kind=KIND_GENERAL_KNOWLEDGE,
-        question="What is the general punishment for theft under Indian law?",
+        question="What is the general punishment for theft under U.S. law?",
         note="Legal question with no firm-document answer - should be answered from general knowledge, not a document.",
     ),
 

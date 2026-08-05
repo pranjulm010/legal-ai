@@ -69,7 +69,7 @@ def setup_eval_firm(fresh: bool = False) -> Firm:
         name=EVAL_FIRM_NAME,
         slug=EVAL_FIRM_SLUG,
         size="solo",
-        default_region="india",
+        default_region="usa",
     )
     user = User.objects.create_user(username=EVAL_USERNAME, password=get_random_string(24))
     profile = LawyerProfile.objects.create(user=user, firm=firm, role="admin")

@@ -17,72 +17,72 @@ const TEMPLATES: { label: string; title: string; prompt: string }[] = [
   {
     label: "NDA",
     title: "Mutual Non-Disclosure Agreement",
-    prompt: "Draft a mutual non-disclosure agreement between two Indian companies exploring a business relationship, with a 3-year term and 5-year survival of confidentiality obligations.",
+    prompt: "Draft a mutual non-disclosure agreement between two U.S. companies exploring a business relationship, with a 3-year term and 5-year survival of confidentiality obligations.",
   },
   {
     label: "Employment Agreement",
     title: "Employment Agreement",
-    prompt: "Draft an employment agreement for a full-time employee in India, including probation period, compensation, confidentiality, IP assignment, and termination notice terms.",
+    prompt: "Draft an employment agreement for a full-time employee in the United States, including probation period, compensation, confidentiality, IP assignment, and termination notice terms.",
   },
   {
     label: "Lease Agreement",
     title: "Residential Lease Agreement",
-    prompt: "Draft an 11-month residential rental agreement under Indian law, including rent, security deposit, maintenance responsibilities, and termination notice periods.",
+    prompt: "Draft a 12-month residential lease agreement under U.S. law, including rent, security deposit, maintenance responsibilities, and termination notice periods.",
   },
   {
     label: "Service Agreement",
     title: "Service Agreement",
-    prompt: "Draft a services agreement between an Indian service provider and client, including scope of work, payment terms, deliverables, and limitation of liability.",
+    prompt: "Draft a services agreement between a U.S. service provider and client, including scope of work, payment terms, deliverables, and limitation of liability.",
   },
   {
-    label: "Partnership Deed",
-    title: "Partnership Deed",
-    prompt: "Draft a partnership deed for a new partnership firm in India, including capital contribution, profit-sharing ratio, admission/retirement of partners, and dispute resolution.",
+    label: "Partnership Agreement",
+    title: "Partnership Agreement",
+    prompt: "Draft a partnership agreement for a new partnership formed in the United States, including capital contribution, profit-sharing ratio, admission/retirement of partners, and dispute resolution.",
   },
   {
     label: "Power of Attorney",
     title: "General Power of Attorney",
-    prompt: "Draft a general power of attorney under Indian law authorizing an agent to act on behalf of the principal for property and financial matters.",
+    prompt: "Draft a general power of attorney under U.S. law authorizing an agent to act on behalf of the principal for property and financial matters.",
   },
   {
     label: "Affidavit",
     title: "Affidavit",
-    prompt: "Draft a general-purpose affidavit format under Indian law with placeholders for the deponent's statement of facts.",
+    prompt: "Draft a general-purpose affidavit format under U.S. law with placeholders for the affiant's statement of facts.",
   },
   {
-    label: "Legal Notice",
-    title: "Legal Notice",
-    prompt: "Draft a legal notice under Indian law to be sent to a party in breach of contract, demanding remedy within 15 days before further legal action.",
+    label: "Demand Letter",
+    title: "Demand Letter",
+    prompt: "Draft a demand letter under U.S. law to be sent to a party in breach of contract, demanding remedy within 15 days before further legal action.",
   },
   {
     label: "Petition",
     title: "Petition",
-    prompt: "Draft a civil petition format under Indian civil procedure, with placeholders for parties, facts, grounds, and prayer for relief.",
+    prompt: "Draft a civil petition format under U.S. civil procedure, with placeholders for parties, facts, grounds, and prayer for relief.",
   },
   {
     label: "Bail Application",
     title: "Bail Application",
-    prompt: "Draft a bail application under Indian criminal procedure (CrPC/BNSS), including placeholders for case facts and grounds for bail.",
+    prompt: "Draft a bail application under U.S. criminal procedure, including placeholders for case facts and grounds for bail.",
   },
   {
     label: "Arbitration Agreement",
     title: "Arbitration Agreement",
-    prompt: "Draft an arbitration clause/agreement under the Indian Arbitration and Conciliation Act, specifying seat, number of arbitrators, and governing law.",
+    prompt: "Draft an arbitration clause/agreement under the Federal Arbitration Act, specifying seat, number of arbitrators, and governing law.",
   },
   {
     label: "Privacy Policy",
     title: "Privacy Policy",
-    prompt: "Draft a privacy policy for an Indian SaaS company, covering data collected, purpose of use, third-party sharing, user rights, and grievance officer contact as required under Indian data protection law.",
+    prompt: "Draft a privacy policy for a U.S. SaaS company, covering data collected, purpose of use, third-party sharing, user rights, and a designated privacy contact as required under U.S. state privacy laws (e.g. the CCPA).",
   },
   {
     label: "Terms of Service",
     title: "Terms of Service",
-    prompt: "Draft terms of service for an Indian SaaS product, covering acceptable use, payment, liability limitation, termination, and governing law/jurisdiction.",
+    prompt: "Draft terms of service for a U.S. SaaS product, covering acceptable use, payment, liability limitation, termination, and governing law/jurisdiction.",
   },
   {
     label: "Vendor Agreement",
     title: "Vendor Agreement",
-    prompt: "Draft a vendor agreement between an Indian company and a supplier, including delivery terms, payment terms, quality standards, and termination rights.",
+    prompt: "Draft a vendor agreement between a U.S. company and a supplier, including delivery terms, payment terms, quality standards, and termination rights.",
   },
 ];
 
@@ -210,7 +210,7 @@ export default function NewDraftPage() {
               placeholder={
                 template
                   ? "e.g. Add a clause allowing early termination with 30 days notice."
-                  : "e.g. Draft a 2-year software licensing agreement between an Indian vendor and client, with a 30-day termination notice period."
+                  : "e.g. Draft a 2-year software licensing agreement between a U.S. vendor and client, with a 30-day termination notice period."
               }
               className="min-h-40 flex-1 resize-y rounded-lg border border-[#c9a96e]/15 bg-transparent px-3 py-2 text-sm text-[#e0d2ba] outline-none focus:border-[#c9a96e]/50"
             />

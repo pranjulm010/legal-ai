@@ -24,7 +24,7 @@ def summarize_document(document_text: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are an Indian legal AI assistant. Summarize the document "
+                    "You are a US legal AI assistant. Summarize the document "
                     "for a lawyer: purpose, parties, key obligations, key dates, "
                     "and anything unusual. Use only what's in the document - do "
                     "not invent facts. Keep it concise and structured with "
@@ -49,7 +49,7 @@ def generate_client_summary(document_text: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are an Indian legal AI assistant. Explain this document "
+                    "You are a US legal AI assistant. Explain this document "
                     "to a non-lawyer client: what it is, what it means for them, "
                     "and what they need to do or watch out for. Plain, simple "
                     "language, no legal jargon. Use only what's in the document."
@@ -128,7 +128,7 @@ def analyze_risks(document_text: str) -> List[Dict]:
     client = get_groq_client()
 
     system_prompt = """
-You are an Indian legal AI assistant performing a risk analysis of a document.
+You are a US legal AI assistant performing a risk analysis of a document.
 
 Return ONLY a JSON object of this exact form:
 {"risks": [{"clause_excerpt": "...", "risk": "...", "severity": "low|medium|high"}]}
@@ -191,7 +191,7 @@ one but missing from the other. Use only what's in the documents.
             {
                 "role": "system",
                 "content": (
-                    "You are an Indian legal AI assistant comparing two documents. "
+                    "You are a US legal AI assistant comparing two documents. "
                     "Be specific and structured (use headings/bullets). Do not "
                     "invent facts not present in either document."
                 ),
@@ -230,7 +230,7 @@ def check_compliance(document_text: str) -> List[Dict]:
     checklist_text = "\n".join(f"- {item}" for item in COMPLIANCE_CHECKLIST)
 
     system_prompt = f"""
-You are an Indian legal AI compliance assistant. Check the document against
+You are a US legal AI compliance assistant. Check the document against
 this standard checklist of commonly-expected clauses:
 
 {checklist_text}

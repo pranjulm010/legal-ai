@@ -14,13 +14,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Legal AI — AI Legal Intelligence Platform for India",
+  title: "Legal AI — AI Legal Intelligence Platform for the United States",
   description:
     "Legal AI is an AI legal associate for law firms, agencies, and legal professionals. Document intelligence, cited legal research, drafting, and multilingual support — with safety guardrails.",
   keywords: [
     "legal AI",
     "AI legal assistant",
-    "Indian legal research",
+    "US legal research",
     "legal document analysis",
     "contract drafting AI",
     "law firm software",

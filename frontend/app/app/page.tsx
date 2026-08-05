@@ -9,7 +9,6 @@ import {
   getChatSession,
   listCases,
   listChatSessions,
-  REGIONS,
   renameChatSession as renameChatSessionApi,
   searchChatHistory,
   uploadDocument as uploadDocumentApi,
@@ -114,9 +113,9 @@ const ANSWER_MODES: {
 
 const SUGGESTED_QUESTIONS = [
   { text: "My phone was stolen. What legal steps should I take now?", icon: "📱" },
-  { text: "Help me understand this FIR and what the next steps are.", icon: "📄" },
-  { text: "Find Supreme Court precedents on anticipatory bail.", icon: "⚖️" },
-  { text: "Explain Article 21 of the Indian Constitution in simple language.", icon: "📚" },
+  { text: "Help me understand this police report and what the next steps are.", icon: "📄" },
+  { text: "Find Supreme Court precedents on qualified immunity.", icon: "⚖️" },
+  { text: "Explain the Fourth Amendment in simple language.", icon: "📚" },
 ];
 
 function getModeLabel(mode: AnswerMode) {
@@ -323,7 +322,6 @@ export default function LexoraLegalChatPage() {
   const [isListening,setIsListening]=useState(false)
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [region, setRegion] = useState("india");
   // Optional case scope: when set, questions are answered from that case's
   // own linked documents (backend scopes search_documents by case_id).
   const [cases, setCases] = useState<CaseListItem[]>([]);
@@ -592,7 +590,7 @@ export default function LexoraLegalChatPage() {
           chat_session_id: activeSessionId,
           document_id: documentId,
           case_id: selectedCaseId,
-          region,
+          region: "usa",
         },
         {
           onSession: (data) => {
@@ -658,7 +656,7 @@ export default function LexoraLegalChatPage() {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   },
-  [answerMode, documentId, documentName, input, loading, documentProcessing, activeSessionId, region, selectedCaseId, refreshSessions]
+  [answerMode, documentId, documentName, input, loading, documentProcessing, activeSessionId, selectedCaseId, refreshSessions]
 );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -900,41 +898,6 @@ export default function LexoraLegalChatPage() {
             >
               🧹 Remove document
             </button>
-
-            <div style={{ marginTop: 16 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 12,
-                  color: "#8a7c68",
-                  marginBottom: 6,
-                }}
-              >
-                🌐 Web search region
-              </label>
-              <select
-                value={region}
-                onChange={(event) => setRegion(event.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 8,
-                  border: "1px solid rgba(201,169,110,0.14)",
-                  background: "#0b0906",
-                  color: "#cfc0a4",
-                  fontSize: 12,
-                }}
-              >
-                {REGIONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-              <p style={{ fontSize: 10, color: "#5a4f3f", marginTop: 4 }}>
-                Restricts web search fallback to this jurisdiction's trusted sources.
-              </p>
-            </div>
 
             <div style={{ marginTop: 22, borderTop: "1px solid rgba(201,169,110,0.1)", paddingTop: 16 }}>
               <h3 style={{ fontSize: 13, color: "#c9a96e", marginBottom: 10 }}>

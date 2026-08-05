@@ -16,17 +16,17 @@ const NAV_LINKS = [
 
 const STATS = [
   { value: "8+", label: "Specialized AI agents" },
-  { value: "11", label: "Indian languages" },
+  { value: "11", label: "Languages supported" },
   { value: "5+", label: "Guardrail layers" },
   { value: "60%", label: "Less research time" },
 ];
 
 const TRUST = [
   "Corporate Law Firms",
-  "Litigation Chambers",
+  "Litigation Firms",
   "Legal Aid Agencies",
   "In-House Counsel",
-  "Solo Advocates",
+  "Solo Attorneys",
   "Compliance Teams",
 ];
 
@@ -34,11 +34,11 @@ const FEATURES = [
   {
     icon: "📄",
     title: "Document Intelligence",
-    desc: "Upload FIRs, contracts, judgments, notices, and court orders for instant, source-backed legal analysis with OCR.",
+    desc: "Upload police reports, contracts, judgments, notices, and court orders for instant, source-backed legal analysis with OCR.",
   },
   {
     icon: "⚖️",
-    title: "Indian Legal Research",
+    title: "US Legal Research",
     desc: "Search case law, constitutional provisions, statutory sections, and court precedents — with verifiable citations.",
   },
   {
@@ -49,7 +49,7 @@ const FEATURES = [
   {
     icon: "🌍",
     title: "Multilingual Support",
-    desc: "Ask in English, Hindi, Urdu, Punjabi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, or Malayalam.",
+    desc: "Ask in English, Spanish, Mandarin, Vietnamese, Tagalog, Arabic, French, Korean, Russian, Haitian Creole, or Portuguese.",
   },
   {
     icon: "🔎",
@@ -92,7 +92,7 @@ const BENEFITS = [
   {
     stat: "24/7",
     title: "Always-on associate",
-    desc: "A tireless legal assistant for your firm, agency, or chambers — available in every language your clients speak.",
+    desc: "A tireless legal assistant for your firm, agency, or practice — available in every language your clients speak.",
   },
 ];
 
@@ -100,7 +100,7 @@ const WORKFLOW = [
   {
     step: "01",
     title: "Ask or Upload",
-    desc: "Pose a legal question or upload an FIR, judgment, contract, court order, notice, or petition.",
+    desc: "Pose a legal question or upload a police report, judgment, contract, court order, notice, or petition.",
   },
   {
     step: "02",
@@ -139,9 +139,9 @@ const PIPELINE: [string, string][] = [
 const PRICING = [
   {
     name: "Starter",
-    price: "₹1,499",
+    price: "$29",
     period: "/mo",
-    target: "Students · Citizens · Solo advocates",
+    target: "Students · Citizens · Solo attorneys",
     features: [
       "Basic legal Q&A",
       "PDF document analysis",
@@ -154,9 +154,9 @@ const PRICING = [
   },
   {
     name: "Professional",
-    price: "₹5,999",
+    price: "$99",
     period: "/mo",
-    target: "Small law firms · Advocates",
+    target: "Small law firms · Attorneys",
     features: [
       "Higher query limits",
       "Advanced document intelligence",
@@ -170,7 +170,7 @@ const PRICING = [
   },
   {
     name: "Business",
-    price: "₹14,999",
+    price: "$299",
     period: "/mo",
     target: "Mid-size firms · Legal teams",
     features: [
@@ -206,41 +206,41 @@ const TESTIMONIALS = [
   {
     quote:
       "Legal AI cut our first-pass contract review from a full afternoon to under ten minutes. The citations mean I actually trust what it surfaces.",
-    name: "Ananya Rao",
+    name: "Sarah Mitchell",
     role: "Senior Partner, Corporate Practice",
-    initials: "AR",
+    initials: "SM",
   },
   {
     quote:
-      "The multilingual support is a game-changer for legal aid. Clients ask in Marathi or Tamil and get grounded, source-backed guidance instantly.",
-    name: "Imran Sheikh",
+      "The multilingual support is a game-changer for legal aid. Clients ask in Spanish or Mandarin and get grounded, source-backed guidance instantly.",
+    name: "Marcus Johnson",
     role: "Director, Legal Aid Agency",
-    initials: "IS",
+    initials: "MJ",
   },
   {
     quote:
       "Guardrails and confidence scoring were what sold us. It refuses to bluff, flags uncertainty, and always points back to the source document.",
-    name: "Priya Nair",
+    name: "Rachel Kim",
     role: "General Counsel, Fintech",
-    initials: "PN",
+    initials: "RK",
   },
   {
     quote:
       "Drafting that mirrors our own templates saves my juniors hours every week. It feels like an associate who already knows our house style.",
-    name: "Vikram Desai",
-    role: "Managing Advocate, Litigation Chambers",
-    initials: "VD",
+    name: "David Chen",
+    role: "Managing Attorney, Litigation Group",
+    initials: "DC",
   },
 ];
 
 const FAQS = [
   {
     q: "What exactly does the AI Legal Agent do?",
-    a: "It reads your legal documents, researches Indian case law and statutes, drafts and redlines agreements, and answers legal questions in 11 languages — every answer grounded in verifiable sources with a legal disclaimer.",
+    a: "It reads your legal documents, researches US case law and statutes, drafts and redlines agreements, and answers legal questions in 11 languages — every answer grounded in verifiable sources with a legal disclaimer.",
   },
   {
     q: "Is it a replacement for a lawyer?",
-    a: "No. Legal AI provides AI-assisted legal information and speeds up research and drafting. It is not a substitute for professional legal advice, and important decisions should always be confirmed with a qualified advocate.",
+    a: "No. Legal AI provides AI-assisted legal information and speeds up research and drafting. It is not a substitute for professional legal advice, and important decisions should always be confirmed with a qualified attorney.",
   },
   {
     q: "How does it keep answers accurate and safe?",
@@ -248,11 +248,11 @@ const FAQS = [
   },
   {
     q: "Can it work with my firm's own documents?",
-    a: "Yes. Upload FIRs, contracts, judgments, notices, and court orders, or connect a Google Drive folder to auto-sync PDFs, Word files, Google Docs, Slides, and Sheets. The OCR + RAG pipeline extracts, embeds, and reasons over them; you can edit any extracted text in-app to correct it, and everything is shared firm-wide so your whole team works from the same case files.",
+    a: "Yes. Upload police reports, contracts, judgments, notices, and court orders, or connect a Google Drive folder to auto-sync PDFs, Word files, Google Docs, Slides, and Sheets. The OCR + RAG pipeline extracts, embeds, and reasons over them; you can edit any extracted text in-app to correct it, and everything is shared firm-wide so your whole team works from the same case files.",
   },
   {
     q: "Which languages are supported?",
-    a: "English, Hindi, Urdu, Punjabi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, and Malayalam — ask in any of them and get a reply in the same language.",
+    a: "English, Spanish, Mandarin, Vietnamese, Tagalog, Arabic, French, Korean, Russian, Haitian Creole, and Portuguese — ask in any of them and get a reply in the same language.",
   },
   {
     q: "Is my data secure?",
@@ -421,7 +421,7 @@ function Hero({ scrollTo }: { scrollTo: (id: string) => void }) {
             className="mb-8 inline-flex items-center gap-2 rounded-full border border-[#c9a96e]/25 bg-[#c9a96e]/10 px-4 py-2 text-xs font-semibold text-[#e5cf9d]"
           >
             <span className="lp-pulse-ring h-1.5 w-1.5 rounded-full bg-[#c9a96e]" />
-            Professional Legal AI · Built for India
+            Professional Legal AI · Built for the United States
           </div>
 
           <h1
@@ -522,7 +522,7 @@ function ChatPreview({ scrollTo }: { scrollTo: (id: string) => void }) {
 
         <div className="flex justify-end">
           <div className="max-w-[360px] rounded-3xl rounded-tr-md bg-[#c9a96e] px-5 py-4 text-sm font-medium leading-6 text-[#1a0e00] shadow-lg shadow-[#c9a96e]/20">
-            Explain this FIR in simple Hindi and tell me the next steps.
+            Explain this police report in simple Spanish and tell me the next steps.
           </div>
         </div>
 
@@ -541,9 +541,9 @@ function ChatPreview({ scrollTo }: { scrollTo: (id: string) => void }) {
                 Suggested next steps
               </p>
               <ul className="mt-2 space-y-1 text-xs text-[#c8b998]">
-                <li>• Verify FIR number, police station, and sections.</li>
+                <li>• Verify report number, police department, and statute sections.</li>
                 <li>• Keep copies of ID, complaint, and supporting proof.</li>
-                <li>• Consult an advocate before filing any reply.</li>
+                <li>• Consult an attorney before filing any reply.</li>
               </ul>
             </div>
           </div>
@@ -564,7 +564,7 @@ function ChatPreview({ scrollTo }: { scrollTo: (id: string) => void }) {
       <div className="border-t border-[#c9a96e]/12 p-4">
         <div className="flex items-center gap-3 rounded-2xl border border-[#c9a96e]/12 bg-[#c9a96e]/[0.03] p-3">
           <span className="flex-1 text-sm text-[#8a7c68]">
-            Ask about FIR, bail, contract, notice, judgment...
+            Ask about a police report, bail, contract, notice, judgment...
           </span>
           <button
             onClick={() => scrollTo("features")}
@@ -587,7 +587,7 @@ function TrustBar() {
   return (
     <section className="border-y border-[#c9a96e]/12 bg-[#c9a96e]/[0.02] py-10">
       <p className="mb-7 text-center text-xs font-semibold uppercase tracking-[0.25em] text-[#8a7c68]">
-        Trusted by legal professionals across India
+        Trusted by legal professionals across the United States
       </p>
       <div className="relative overflow-hidden [mask-image:linear-gradient(to_right,transparent,#000_12%,#000_88%,transparent)]">
         <div className="lp-marquee-track flex w-max items-center gap-12 px-6">
@@ -781,7 +781,7 @@ function Pricing() {
     <section id="pricing" className="mx-auto max-w-7xl px-6 py-24">
       <SectionHeading
         eyebrow="Pricing"
-        title="Plans for citizens, advocates, and legal teams"
+        title="Plans for citizens, attorneys, and legal teams"
         subtitle="Start simple, then scale to professional research, team workflows, and enterprise legal intelligence."
       />
       <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
@@ -991,7 +991,7 @@ function Footer() {
           </div>
           <p className="mt-4 max-w-sm text-sm leading-7 text-[#8a7c68]">
             AI Legal Intelligence Platform for law firms, agencies, and legal
-            professionals across India.
+            professionals across the United States.
           </p>
           <Link
             href="/login"
@@ -1036,32 +1036,32 @@ function Footer() {
           <ul className="mt-4 space-y-3 text-sm text-[#8a7c68]">
             <li>
               <a
-                href="https://livelaw.in"
+                href="https://www.courtlistener.com"
                 target="_blank"
                 rel="noreferrer"
                 className="transition hover:text-[#f0e6cc]"
               >
-                LiveLaw
+                CourtListener
               </a>
             </li>
             <li>
               <a
-                href="https://barandbench.com"
+                href="https://www.justia.com"
                 target="_blank"
                 rel="noreferrer"
                 className="transition hover:text-[#f0e6cc]"
               >
-                Bar &amp; Bench
+                Justia
               </a>
             </li>
             <li>
               <a
-                href="https://indiankanoon.org"
+                href="https://www.law.cornell.edu"
                 target="_blank"
                 rel="noreferrer"
                 className="transition hover:text-[#f0e6cc]"
               >
-                Indian Kanoon
+                Cornell Legal Information Institute
               </a>
             </li>
             <li>

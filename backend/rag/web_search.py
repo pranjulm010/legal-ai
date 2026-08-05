@@ -94,7 +94,7 @@ TRUSTED_DOMAINS_BY_REGION: Dict[str, List[str]] = {
     ],
 }
 
-DEFAULT_REGION = "india"
+DEFAULT_REGION = "usa"
 
 
 def search_indiankanoon(query: str, max_results: int = 5) -> List[Dict]:
@@ -225,7 +225,7 @@ def search_legal_web(query: str, region: str = DEFAULT_REGION, max_results_per_s
     Combine results from all trusted sources for the given region. Each
     source is independently fault-tolerant: a failure on one does not
     affect the others. `region` must be a key in TRUSTED_DOMAINS_BY_REGION
-    (falls back to India if unrecognized) - jurisdiction is never assumed
+    (falls back to DEFAULT_REGION if unrecognized) - jurisdiction is never assumed
     silently for a region the caller didn't ask for.
     """
 

@@ -64,7 +64,7 @@ export default function ProfileTab({ isAdmin }: { isAdmin: boolean }) {
   const [firmPhone, setFirmPhone] = useState("");
   const [firmWebsite, setFirmWebsite] = useState("");
   const [firmGstNumber, setFirmGstNumber] = useState("");
-  const [firmDefaultRegion, setFirmDefaultRegion] = useState("india");
+  const [firmDefaultRegion, setFirmDefaultRegion] = useState("usa");
 
   const fillMeForm = (profile: MeProfile) => {
     setFirstName(profile.first_name);

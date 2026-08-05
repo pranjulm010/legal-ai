@@ -1,6 +1,6 @@
 MUTUAL NON-DISCLOSURE AGREEMENT
 
-This Mutual Non-Disclosure Agreement ("Agreement") is entered into as of the Effective Date by and between Vertex Consulting Pvt. Ltd., a company incorporated under the laws of India, having its registered office at 4th Floor, Lakeview Towers, Bengaluru, Karnataka ("Disclosing Party"), and Orion Softworks LLP, having its registered office at 12 MG Road, Pune, Maharashtra ("Receiving Party"), collectively referred to as the "Parties."
+This Mutual Non-Disclosure Agreement ("Agreement") is entered into as of the Effective Date by and between Vertex Consulting LLC, a company incorporated under the laws of the State of Delaware, having its registered office at 4th Floor, Lakeview Towers, Austin, Texas ("Disclosing Party"), and Orion Softworks LLC, having its registered office at 12 Congress Avenue, Austin, Texas ("Receiving Party"), collectively referred to as the "Parties."
 
 1. PURPOSE
 The Parties wish to explore a potential business relationship involving the evaluation of a joint technology licensing arrangement (the "Purpose"). In connection with the Purpose, each Party may disclose to the other certain confidential technical, financial, and business information.
@@ -27,7 +27,7 @@ Nothing in this Agreement shall be construed as granting any rights, by license 
 Each Party acknowledges that unauthorized disclosure of Confidential Information may cause irreparable harm for which monetary damages would be an inadequate remedy, and accordingly, the disclosing Party shall be entitled to seek injunctive relief in addition to any other remedies available at law or in equity.
 
 9. GOVERNING LAW AND JURISDICTION
-This Agreement shall be governed by and construed in accordance with the laws of India. The courts at Bengaluru, Karnataka shall have exclusive jurisdiction over any disputes arising out of or in connection with this Agreement.
+This Agreement shall be governed by and construed in accordance with the laws of the State of Texas. The courts located in Travis County, Texas shall have exclusive jurisdiction over any disputes arising out of or in connection with this Agreement.
 
 10. ENTIRE AGREEMENT
 This Agreement constitutes the entire understanding between the Parties with respect to the subject matter hereof and supersedes all prior discussions, negotiations, and agreements, whether written or oral, relating to such subject matter. This Agreement may only be amended by a written instrument signed by both Parties.

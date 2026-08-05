@@ -261,7 +261,7 @@ def chat_turn_events(
                 session=session,
                 document=document,
                 case_id=active_case_id,
-                region=region or getattr(user.firm, "default_region", "") or "india",
+                region=region or getattr(user.firm, "default_region", "") or "usa",
             )
             schemas = groq_schemas(user)
 

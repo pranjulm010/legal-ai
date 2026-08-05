@@ -24,7 +24,7 @@ class ToolContext:
     session: Any = None            # ChatSession, if resolved
     document: Any = None           # UploadedDocument attached to the turn
     case_id: Optional[int] = None  # active case narrowed to in this session
-    region: str = "india"
+    region: str = "usa"
 
 
 @dataclass
