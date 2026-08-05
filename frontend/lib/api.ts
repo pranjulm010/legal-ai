@@ -1183,6 +1183,40 @@ export const updateDocumentContent = async (
   return response.data;
 };
 
+export const IMAGE_DOCUMENT_TYPES = ["jpg", "jpeg", "png"];
+
+export const isImageDocumentType = (documentType: string): boolean =>
+  IMAGE_DOCUMENT_TYPES.includes(documentType.toLowerCase());
+
+// Fetches the original image bytes for an image document so it can be
+// loaded into the in-app editor - separate from getDocumentContent, which
+// returns the OCR'd text, not the binary.
+export const getDocumentImage = async (documentId: string): Promise<Blob> => {
+  const response = await api.get(`/documents/${documentId}/image/`, {
+    responseType: "blob",
+  });
+  return response.data;
+};
+
+// Uploads an edited image back over the original: the backend drops the old
+// OCR'd chunks and re-runs OCR against the new image in the background, so
+// the knowledge base text stays in sync with what the image now shows.
+export const updateDocumentImage = async (
+  documentId: string,
+  image: Blob,
+  fileName: string
+): Promise<DocumentStatus> => {
+  const formData = new FormData();
+  formData.append("file", image, fileName);
+
+  const response = await api.post(`/documents/${documentId}/image/`, formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+  return response.data;
+};
+
 export const summarizeDocument = async (documentId: string): Promise<string> => {
   const response = await api.post(`/documents/${documentId}/summarize/`);
   return response.data.summary;

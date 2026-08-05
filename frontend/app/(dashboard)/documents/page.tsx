@@ -7,13 +7,17 @@ import {
   compareDocuments,
   deleteDocument,
   getDocumentContent,
+  getDocumentImage,
+  isImageDocumentType,
   listDocuments,
   renameDocument,
   reprocessDocument,
   updateDocumentContent,
+  updateDocumentImage,
   waitForDocumentReady,
   type DocumentListItem,
 } from "@/lib/api";
+import ImageEditor from "@/components/documents/ImageEditor";
 
 const PAGE_SIZE = 10;
 
@@ -66,6 +70,12 @@ export default function DocumentsPage() {
   const [loadingContent, setLoadingContent] = useState(false);
   const [savingContent, setSavingContent] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
+
+  const [editingImageDoc, setEditingImageDoc] = useState<DocumentListItem | null>(null);
+  const [imageBlob, setImageBlob] = useState<Blob | null>(null);
+  const [loadingImage, setLoadingImage] = useState(false);
+  const [savingImage, setSavingImage] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
 
   const [compareSelection, setCompareSelection] = useState<string[]>([]);
   const [comparing, setComparing] = useState(false);
@@ -162,7 +172,15 @@ export default function DocumentsPage() {
     }
   };
 
+  // Image documents get the canvas-based image editor instead of the
+  // plain-text editor - editing the text of a scanned image doesn't make
+  // sense when the source of truth is the picture itself.
   const openEditor = async (doc: DocumentListItem) => {
+    if (isImageDocumentType(doc.document_type)) {
+      openImageEditor(doc);
+      return;
+    }
+
     setEditingDoc(doc);
     setContentDraft("");
     setContentError(null);
@@ -200,6 +218,50 @@ export default function DocumentsPage() {
       setContentError("Saving failed. Please try again.");
     } finally {
       setSavingContent(false);
+    }
+  };
+
+  const openImageEditor = async (doc: DocumentListItem) => {
+    setEditingImageDoc(doc);
+    setImageBlob(null);
+    setImageError(null);
+    setLoadingImage(true);
+    try {
+      const blob = await getDocumentImage(doc.document_id);
+      setImageBlob(blob);
+    } catch {
+      setImageError("Could not load this image for editing.");
+    } finally {
+      setLoadingImage(false);
+    }
+  };
+
+  const closeImageEditor = () => {
+    setEditingImageDoc(null);
+    setImageBlob(null);
+    setImageError(null);
+  };
+
+  const handleSaveImage = async (edited: Blob) => {
+    if (!editingImageDoc) return;
+    setSavingImage(true);
+    setImageError(null);
+    try {
+      const result = await updateDocumentImage(
+        editingImageDoc.document_id,
+        edited,
+        editingImageDoc.file_name
+      );
+      updateDocumentInList(editingImageDoc.document_id, {
+        status: result.status,
+        error_message: result.error_message,
+      });
+      closeImageEditor();
+      pollDocumentStatus(editingImageDoc.document_id);
+    } catch {
+      setImageError("Saving the edited image failed. Please try again.");
+    } finally {
+      setSavingImage(false);
     }
   };
 
@@ -469,6 +531,34 @@ export default function DocumentsPage() {
                 {savingContent ? "Saving..." : "Save changes"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {editingImageDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={closeImageEditor}
+        >
+          <div onClick={(event) => event.stopPropagation()}>
+            {loadingImage || !imageBlob ? (
+              <div className="w-full max-w-md rounded-xl border border-[#c9a96e]/20 bg-[#0f0c08] p-10 text-center">
+                {imageError ? (
+                  <p className="text-sm text-red-400">{imageError}</p>
+                ) : (
+                  <p className="text-sm text-[#8a7c68]">Loading image...</p>
+                )}
+              </div>
+            ) : (
+              <ImageEditor
+                imageBlob={imageBlob}
+                fileName={editingImageDoc.file_name}
+                saving={savingImage}
+                error={imageError}
+                onSave={handleSaveImage}
+                onClose={closeImageEditor}
+              />
+            )}
           </div>
         </div>
       )}

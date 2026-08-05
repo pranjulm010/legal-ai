@@ -7,6 +7,7 @@ from ninja.files import UploadedFile
 import requests
 from django.conf import settings
 from django.db.models import Q
+from django.http import HttpResponse
 from django.utils import timezone
 from accounts.audit import log_audit_event
 from accounts.auth import JWTAuth
@@ -45,7 +46,7 @@ from rag.document_intelligence import (
     generate_client_summary,
     summarize_document,
 )
-from rag.document_processor import extract_text_from_document
+from rag.document_processor import IMAGE_EXTENSIONS, extract_text_from_document
 from rag.rag_pipeline import process_uploaded_document
 from rag.vector_store import delete_document_chunks
 
@@ -763,6 +764,120 @@ def reprocess_document(request, document_id: str):
         actor=request.auth,
         action="document_reprocessed",
         details=f"Force re-ran RAG processing for document: {document.original_name}",
+    )
+
+    return 200, {
+        "document_id": str(document.document_id),
+        "status": document.status,
+        "total_chunks": document.total_chunks,
+        "error_message": document.error_message,
+    }
+
+
+_IMAGE_CONTENT_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
+
+
+@api.get(
+    "/documents/{document_id}/image/",
+    auth=JWTAuth(),
+    response={400: ErrorResponseSchema, 403: ErrorResponseSchema, 404: ErrorResponseSchema},
+)
+def get_document_image(request, document_id: str):
+    """
+    Streams the original image bytes for an image-type document so the
+    frontend can load it into the in-app image editor. Kept separate from
+    /content/ (which returns OCR'd text) since an <img>/canvas needs the
+    actual binary, not a JSON payload.
+    """
+    document, error = _get_owned_document(request, document_id)
+    if error:
+        return error
+
+    if document.document_type not in IMAGE_EXTENSIONS:
+        return 400, {"error": "This document is not an image."}
+
+    try:
+        with document.file.open("rb") as opened:
+            data = opened.read()
+    except FileNotFoundError:
+        return 404, {"error": "Image file not found."}
+
+    content_type = _IMAGE_CONTENT_TYPES.get(document.document_type, "application/octet-stream")
+    return HttpResponse(data, content_type=content_type)
+
+
+@api.post(
+    "/documents/{document_id}/image/",
+    auth=JWTAuth(),
+    response={
+        200: DocumentStatusSchema,
+        400: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+    },
+)
+def update_document_image(request, document_id: str, file: UploadedFile = File(...)):
+    """
+    Replaces an image document's binary with an edited version (e.g. from
+    the in-app annotation editor) and re-syncs the knowledge base to match:
+    the old chunks/embeddings are dropped, edited_text is cleared so the
+    background pass re-runs OCR fresh against the new image instead of
+    reusing stale text, and the document goes to "processing" until the
+    new OCR text is re-chunked and re-embedded - mirrors
+    update_document_content's re-embed flow, just for the image-source case.
+    """
+    document, error = _get_owned_document(request, document_id)
+    if error:
+        return error
+
+    denied = require_permission(request, "edit_document")
+    if denied:
+        return denied
+
+    if document.document_type not in IMAGE_EXTENSIONS:
+        return 400, {"error": "Only image documents can be edited this way."}
+
+    new_type = get_uploaded_file_type(file.name) or document.document_type
+    if new_type not in IMAGE_EXTENSIONS:
+        return 400, {
+            "error": "Edited image must be a JPG or PNG.",
+            "supported_types": IMAGE_EXTENSIONS,
+        }
+
+    validation_error = _validate_uploaded_file(file, new_type)
+    if validation_error:
+        return 400, {"error": validation_error}
+
+    old_file_name = document.file.name
+
+    document.file = file
+    document.document_type = new_type
+    document.edited_text = ""
+    document.status = "processing"
+    document.error_message = ""
+    document.save(
+        update_fields=["file", "document_type", "edited_text", "status", "error_message"]
+    )
+
+    if old_file_name and old_file_name != document.file.name:
+        document.file.storage.delete(old_file_name)
+
+    # Drop the old chunks now so a failed/slow re-embed can never leave the
+    # pre-edit image's OCR text searchable alongside the new one, same
+    # reasoning as update_document_content.
+    delete_document_chunks(document_id=str(document.document_id), firm_id=document.firm_id)
+
+    threading.Thread(
+        target=_process_document_in_background,
+        args=(document.id,),
+        daemon=True,
+    ).start()
+
+    log_audit_event(
+        firm=request.auth.firm,
+        actor=request.auth,
+        action="document_image_edited",
+        details=f"Edited image of document: {document.original_name}",
     )
 
     return 200, {
