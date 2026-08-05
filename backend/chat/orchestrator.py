@@ -12,6 +12,7 @@ import time
 from typing import Dict, Generator, List, Optional, Tuple
 
 import groq
+import openai
 
 from rag.embeddings import embed_text
 from rag.groq_client import get_groq_client, get_groq_model
@@ -75,12 +76,18 @@ _RETRY_AFTER_RE = re.compile(r"try again in (\d+(?:\.\d+)?)s", re.I)
 _MAX_429_RETRIES = 2
 _MAX_429_WAIT_SECONDS = 30.0
 
+# Groq's native SDK raises its own exception class. The OpenAI provider
+# path uses openai's SDK directly, and litellm (anthropic/gemini) maps its
+# errors onto openai's exception hierarchy by design - so catching both
+# covers every provider this pipeline can route through.
+_PROVIDER_STATUS_ERRORS = (groq.APIStatusError, openai.APIStatusError)
+
 
 def _completion_with_retry(client, **kwargs):
     for attempt in range(_MAX_429_RETRIES + 1):
         try:
             return client.chat.completions.create(**kwargs)
-        except groq.APIStatusError as error:
+        except _PROVIDER_STATUS_ERRORS as error:
             if getattr(error, "status_code", None) != 429 or attempt == _MAX_429_RETRIES:
                 raise
             match = _RETRY_AFTER_RE.search(str(error))
@@ -415,7 +422,7 @@ def chat_turn_events(
 
     except _TurnError as error:
         yield "error", {"error": error.message}
-    except groq.APIStatusError as error:
+    except _PROVIDER_STATUS_ERRORS as error:
         status_code = getattr(error, "status_code", None)
         if status_code == 413:
             yield "error", {"error": _TOO_LONG_MESSAGE}

@@ -7,9 +7,7 @@ honored via rag.groq_client / rag.llm_override.
 import json
 from typing import Dict, List
 
-from django.conf import settings
-
-from rag.groq_client import get_groq_client
+from rag.groq_client import get_fast_model, get_groq_client
 
 
 def fast_json_completion(messages: List[Dict], default: Dict, max_tokens: int = 600) -> Dict:
@@ -22,7 +20,7 @@ def fast_json_completion(messages: List[Dict], default: Dict, max_tokens: int = 
     try:
         client = get_groq_client()
         response = client.chat.completions.create(
-            model=settings.GROQ_FAST_MODEL,
+            model=get_fast_model(),
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0,

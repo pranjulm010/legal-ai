@@ -138,9 +138,11 @@ class FirmLLMConfig(models.Model):
         ("gemini", "Google Gemini"),
     ]
 
-    # Providers the pipeline can actually route requests through today.
-    # Keys for the others can be stored/validated but not activated yet.
-    ROUTABLE_PROVIDERS = ["groq"]
+    # Providers the pipeline can actually route requests through. groq and
+    # openai use their native SDKs directly; anthropic and gemini route
+    # through litellm (see rag.groq_client), which translates their very
+    # different native APIs into the same OpenAI-shaped interface.
+    ROUTABLE_PROVIDERS = ["groq", "openai", "anthropic", "gemini"]
 
     firm = models.ForeignKey(Firm, on_delete=models.CASCADE, related_name="llm_configs")
     provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)

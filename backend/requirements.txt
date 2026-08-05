@@ -21,6 +21,8 @@ Pillow==11.3.0
 sentence-transformers==5.5.1
 chromadb==1.5.9
 groq==0.37.1
+openai==2.53.0
+litellm==1.95.0
 
 google-api-python-client==2.197.0
 google-auth==2.53.0
