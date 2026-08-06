@@ -24,11 +24,10 @@ from .llm_override import get_override
 # Fallback model used when a firm activates a provider but leaves the
 # "Model" field blank.
 _DEFAULT_MODELS = {
-    "openai": "gpt-4o",
-    "anthropic": "claude-sonnet-5",
-    "gemini": "gemini-2.0-flash",
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-haiku-4-5",
+    "gemini": "gemini-3.5-flash",
 }
-
 # litellm routes on a "<provider>/<model>" prefixed model string.
 _LITELLM_PREFIX = {
     "anthropic": "anthropic",

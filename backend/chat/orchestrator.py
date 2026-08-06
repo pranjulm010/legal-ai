@@ -57,9 +57,29 @@ _PROVIDER_BUSY_MESSAGE = (
     "The AI service has hit its usage limit for the moment. Please wait a "
     "little while and try again - this clears on its own shortly."
 )
+_PROVIDER_QUOTA_EXHAUSTED_MESSAGE = (
+    "The AI service's account has run out of credits and can't respond "
+    "right now. Please contact your administrator to add billing credits."
+)
 _GENERIC_ERROR_MESSAGE = (
     "Something went wrong while generating the answer. Please try again in a moment."
 )
+
+# A 429 can mean two very different things: a per-minute rate limit (waits
+# itself out) or an empty billing balance (won't clear until someone adds
+# credits). Both OpenAI and Groq's OpenAI-compatible error bodies carry a
+# `code`/`type` for the latter - check that before assuming "try again"
+# will ever work.
+_QUOTA_EXHAUSTED_CODES = {"insufficient_quota", "credit_balance_exhausted"}
+
+
+def _is_quota_exhausted(error) -> bool:
+    if getattr(error, "code", None) in _QUOTA_EXHAUSTED_CODES:
+        return True
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        return body.get("code") in _QUOTA_EXHAUSTED_CODES or body.get("type") in _QUOTA_EXHAUSTED_CODES
+    return False
 
 
 class _TurnError(Exception):
@@ -68,13 +88,16 @@ class _TurnError(Exception):
         self.message = message
 
 
-# Provider 429s are transient (per-minute token budgets) and usually carry a
-# "try again in Ns" hint - waiting it out once or twice turns a dead turn
-# into a slightly slower one. Anything longer than the cap is surfaced to
-# the user instead of silently hanging the stream.
+# Provider 429s (per-minute token budgets) and 503s (upstream overload,
+# e.g. Gemini's "high demand" response) are both transient - waiting it out
+# once or twice turns a dead turn into a slightly slower one. Anything
+# longer than the cap is surfaced to the user instead of silently hanging
+# the stream.
 _RETRY_AFTER_RE = re.compile(r"try again in (\d+(?:\.\d+)?)s", re.I)
-_MAX_429_RETRIES = 2
-_MAX_429_WAIT_SECONDS = 30.0
+_RETRYABLE_STATUS_CODES = {429, 503}
+_MAX_RETRIES = 2
+_MAX_WAIT_SECONDS = 30.0
+_DEFAULT_WAIT_SECONDS = {429: 10.0, 503: 5.0}
 
 # Groq's native SDK raises its own exception class. The OpenAI provider
 # path uses openai's SDK directly, and litellm (anthropic/gemini) maps its
@@ -84,14 +107,18 @@ _PROVIDER_STATUS_ERRORS = (groq.APIStatusError, openai.APIStatusError)
 
 
 def _completion_with_retry(client, **kwargs):
-    for attempt in range(_MAX_429_RETRIES + 1):
+    for attempt in range(_MAX_RETRIES + 1):
         try:
             return client.chat.completions.create(**kwargs)
         except _PROVIDER_STATUS_ERRORS as error:
-            if getattr(error, "status_code", None) != 429 or attempt == _MAX_429_RETRIES:
+            status_code = getattr(error, "status_code", None)
+            if status_code not in _RETRYABLE_STATUS_CODES or attempt == _MAX_RETRIES:
+                raise
+            if status_code == 429 and _is_quota_exhausted(error):
                 raise
             match = _RETRY_AFTER_RE.search(str(error))
-            wait = min(float(match.group(1)) + 1.0 if match else 10.0, _MAX_429_WAIT_SECONDS)
+            default_wait = _DEFAULT_WAIT_SECONDS.get(status_code, 10.0)
+            wait = min(float(match.group(1)) + 1.0 if match else default_wait, _MAX_WAIT_SECONDS)
             time.sleep(wait)
 
 
@@ -426,6 +453,8 @@ def chat_turn_events(
         status_code = getattr(error, "status_code", None)
         if status_code == 413:
             yield "error", {"error": _TOO_LONG_MESSAGE}
+        elif status_code == 429 and _is_quota_exhausted(error):
+            yield "error", {"error": _PROVIDER_QUOTA_EXHAUSTED_MESSAGE}
         elif status_code == 429:
             yield "error", {"error": _PROVIDER_BUSY_MESSAGE}
         else:
